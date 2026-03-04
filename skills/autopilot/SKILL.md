@@ -34,9 +34,23 @@ Most non-trivial software tasks require coordinated phases: understanding requir
 - Cancel with `/cancel` at any time; progress is preserved for resume
 - If a deep-interview spec exists, use it as high-clarity phase input instead of re-expanding from scratch
 - If input is too vague for reliable expansion, offer/trigger `$deep-interview` first
+- Do not enter expansion/planning/execution-heavy phases until pre-context grounding exists; if fast execution is forced, proceed only with explicit risk notes
 </Execution_Policy>
 
 <Steps>
+0. **Pre-context Intake (required before Phase 0 starts)**:
+   - Derive a task slug from the request.
+   - Load the latest relevant snapshot from `.omx/context/{slug}-*.md` when available.
+   - If no snapshot exists, create `.omx/context/{slug}-{timestamp}.md` (UTC `YYYYMMDDTHHMMSSZ`) with:
+     - Task statement
+     - Desired outcome
+     - Known facts/evidence
+     - Constraints
+     - Unknowns/open questions
+     - Likely codebase touchpoints
+   - If ambiguity remains high, run `explore` first for brownfield facts, then run `$deep-interview --quick <task>` before proceeding.
+   - Carry the snapshot path into autopilot artifacts/state so all phases share grounded context.
+
 1. **Phase 0 - Expansion**: Turn the user's idea into a detailed spec
    - If `.omx/specs/deep-interview-*.md` exists for this task: reuse it and skip redundant expansion work
    - If prompt is highly vague: route to `$deep-interview` for Socratic ambiguity-gated clarification
@@ -88,7 +102,7 @@ Most non-trivial software tasks require coordinated phases: understanding requir
 Use `omx_state` MCP tools for autopilot lifecycle state.
 
 - **On start**:
-  `state_write({mode: "autopilot", active: true, current_phase: "expansion", started_at: "<now>"})`
+  `state_write({mode: "autopilot", active: true, current_phase: "expansion", started_at: "<now>", state: {context_snapshot_path: "<snapshot-path>"}})`
 - **On phase transitions**:
   `state_write({mode: "autopilot", current_phase: "planning"})`
   `state_write({mode: "autopilot", current_phase: "execution"})`

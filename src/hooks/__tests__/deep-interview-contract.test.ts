@@ -45,6 +45,13 @@ describe('deep-interview Ouroboros contract', () => {
     assert.match(deepInterviewSkill, /\.omx\/interviews\//);
     assert.match(deepInterviewSkill, /\.omx\/specs\//);
   });
+
+  it('requires preflight context intake before interview rounds', () => {
+    assert.match(deepInterviewSkill, /Phase 0: Preflight Context Intake/i);
+    assert.match(deepInterviewSkill, /preflight context intake before the first interview question/i);
+    assert.match(deepInterviewSkill, /\.omx\/context\/\{slug\}-\{timestamp\}\.md/);
+    assert.match(deepInterviewSkill, /context_snapshot_path/i);
+  });
 });
 
 describe('cross-skill and AGENTS coherence for deep-interview', () => {

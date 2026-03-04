@@ -38,6 +38,18 @@ Complex tasks often fail silently: partial implementations get declared "done", 
 </Execution_Policy>
 
 <Steps>
+0. **Pre-context intake (required before planning/execution loop starts)**:
+   - Assemble or load a context snapshot at `.omx/context/{task-slug}-{timestamp}.md` (UTC `YYYYMMDDTHHMMSSZ`).
+   - Minimum snapshot fields:
+     - task statement
+     - desired outcome
+     - known facts/evidence
+     - constraints
+     - unknowns/open questions
+     - likely codebase touchpoints
+   - If an existing relevant snapshot is available, reuse it and record the path in Ralph state.
+   - If request ambiguity is high, run `explore` first for brownfield facts, then run `$deep-interview --quick <task>` to close critical gaps.
+   - Do not begin Ralph execution work (delegation, implementation, or verification loops) until snapshot grounding exists. If forced to proceed quickly, note explicit risk tradeoffs.
 1. **Review progress**: Check TODO list and any prior iteration state
 2. **Continue from where you left off**: Pick up incomplete tasks
 3. **Delegate in parallel**: Route tasks to specialist agents at appropriate tiers
@@ -71,6 +83,7 @@ Complex tasks often fail silently: partial implementations get declared "done", 
 - Skip Codex consultation for simple feature additions, well-tested changes, or time-critical verification
 - If ToolSearch finds no MCP tools or Codex is unavailable, proceed with architect agent verification alone -- never block on external tools
 - Use `state_write` / `state_read` for ralph mode state persistence between iterations
+- Persist context snapshot path in Ralph mode state so later phases and agents share the same grounding context
 </Tool_Usage>
 
 ## State Management
@@ -78,7 +91,7 @@ Complex tasks often fail silently: partial implementations get declared "done", 
 Use the `omx_state` MCP server tools (`state_write`, `state_read`, `state_clear`) for Ralph lifecycle state.
 
 - **On start**:
-  `state_write({mode: "ralph", active: true, iteration: 1, max_iterations: 10, current_phase: "executing", started_at: "<now>"})`
+  `state_write({mode: "ralph", active: true, iteration: 1, max_iterations: 10, current_phase: "executing", started_at: "<now>", state: {context_snapshot_path: "<snapshot-path>"}})`
 - **On each iteration**:
   `state_write({mode: "ralph", iteration: <current>, current_phase: "executing"})`
 - **On verification/fix transition**:

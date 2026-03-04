@@ -40,12 +40,27 @@ If no flag is provided, use **Standard**.
 - Ask ONE question per round (never batch)
 - Target the weakest clarity dimension each round
 - Gather codebase facts via `explore` before asking user about internals
+- Always run a preflight context intake before the first interview question
+- In Codex CLI, prefer `request_user_input` when available; if unavailable, fall back to concise plain-text one-question turns
 - Re-score ambiguity after each answer and show progress transparently
 - Do not hand off to execution while ambiguity remains above threshold unless user explicitly opts to proceed with warning
 - Persist mode state for resume safety (`state_write` / `state_read`)
 </Execution_Policy>
 
 <Steps>
+
+## Phase 0: Preflight Context Intake
+
+1. Parse `{{ARGUMENTS}}` and derive a short task slug.
+2. Attempt to load the latest relevant context snapshot from `.omx/context/{slug}-*.md`.
+3. If no snapshot exists, create a minimum context snapshot with:
+   - Task statement
+   - Desired outcome
+   - Known facts/evidence
+   - Constraints
+   - Unknowns/open questions
+   - Likely codebase touchpoints
+4. Save snapshot to `.omx/context/{slug}-{timestamp}.md` (UTC `YYYYMMDDTHHMMSSZ`) and reference it in mode state.
 
 ## Phase 1: Initialize
 
@@ -69,7 +84,8 @@ If no flag is provided, use **Standard**.
     "threshold": 0.3,
     "max_rounds": 5,
     "challenge_modes_used": [],
-    "codebase_context": null
+    "codebase_context": null,
+    "context_snapshot_path": ".omx/context/<slug>-<timestamp>.md"
   }
 }
 ```
@@ -143,6 +159,7 @@ When threshold is met (or user exits with warning / hard cap):
 
 Spec should include:
 - Metadata (profile, rounds, final ambiguity, threshold, context type)
+- Context snapshot reference/path (for ralplan/team reuse)
 - Clarity breakdown table
 - Goal / Constraints / Non-goals
 - Testable acceptance criteria
@@ -172,8 +189,10 @@ Present execution options after artifact generation:
 
 <Tool_Usage>
 - Use `explore` for codebase fact gathering
-- Use structured user-input tool for each interview round
+- Use `request_user_input` / structured user-input tool for each interview round when available
+- If structured question tools are unavailable, use plain-text single-question rounds and keep the same stage order
 - Use `state_write` / `state_read` for resumable mode state
+- Read/write context snapshots under `.omx/context/`
 - Save transcript/spec artifacts under `.omx/interviews/` and `.omx/specs/`
 </Tool_Usage>
 
@@ -185,6 +204,7 @@ Present execution options after artifact generation:
 </Escalation_And_Stop_Conditions>
 
 <Final_Checklist>
+- [ ] Preflight context snapshot exists under `.omx/context/{slug}-{timestamp}.md`
 - [ ] Ambiguity score shown each round
 - [ ] Weakest-dimension targeting used
 - [ ] Challenge modes triggered at thresholds (when applicable)
