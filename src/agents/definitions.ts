@@ -43,7 +43,7 @@ export const AGENT_DEFINITIONS: Record<string, AgentDefinition> = {
   'analyst': {
     name: 'analyst',
     description: 'Requirements clarity, acceptance criteria, hidden constraints',
-    reasoningEffort: 'high',
+    reasoningEffort: 'medium',
     posture: 'frontier-orchestrator',
     modelClass: 'frontier',
     routingRole: 'leader',
@@ -53,7 +53,7 @@ export const AGENT_DEFINITIONS: Record<string, AgentDefinition> = {
   'planner': {
     name: 'planner',
     description: 'Task sequencing, execution plans, risk flags',
-    reasoningEffort: 'high',
+    reasoningEffort: 'medium',
     posture: 'frontier-orchestrator',
     modelClass: 'frontier',
     routingRole: 'leader',
@@ -218,7 +218,7 @@ export const AGENT_DEFINITIONS: Record<string, AgentDefinition> = {
   'qa-tester': {
     name: 'qa-tester',
     description: 'Interactive CLI/service runtime validation',
-    reasoningEffort: 'medium',
+    reasoningEffort: 'low',
     posture: 'deep-worker',
     modelClass: 'standard',
     routingRole: 'executor',
@@ -248,7 +248,7 @@ export const AGENT_DEFINITIONS: Record<string, AgentDefinition> = {
   'researcher': {
     name: 'researcher',
     description: 'External documentation and reference research',
-    reasoningEffort: 'medium',
+    reasoningEffort: 'low',
     posture: 'fast-lane',
     modelClass: 'standard',
     routingRole: 'specialist',
@@ -280,7 +280,7 @@ export const AGENT_DEFINITIONS: Record<string, AgentDefinition> = {
   'information-architect': {
     name: 'information-architect',
     description: 'Taxonomy, navigation, findability',
-    reasoningEffort: 'medium',
+    reasoningEffort: 'low',
     posture: 'frontier-orchestrator',
     modelClass: 'standard',
     routingRole: 'specialist',
@@ -290,7 +290,7 @@ export const AGENT_DEFINITIONS: Record<string, AgentDefinition> = {
   'product-analyst': {
     name: 'product-analyst',
     description: 'Product metrics, funnel analysis, experiments',
-    reasoningEffort: 'medium',
+    reasoningEffort: 'low',
     posture: 'frontier-orchestrator',
     modelClass: 'standard',
     routingRole: 'specialist',
@@ -312,7 +312,7 @@ export const AGENT_DEFINITIONS: Record<string, AgentDefinition> = {
   'vision': {
     name: 'vision',
     description: 'Image/screenshot/diagram analysis',
-    reasoningEffort: 'medium',
+    reasoningEffort: 'low',
     posture: 'fast-lane',
     modelClass: 'standard',
     routingRole: 'specialist',
