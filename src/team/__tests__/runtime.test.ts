@@ -1895,7 +1895,7 @@ esac
     }
   });
 
-  it('shutdownTeam preserves leader and hud exclusions in teardown', async () => {
+  it('shutdownTeam preserves leader exclusion while tearing down the hud pane', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-shutdown-exclusions-'));
     const fakeBinDir = await mkdtemp(join(tmpdir(), 'omx-runtime-shutdown-exclusions-bin-'));
     const tmuxLogPath = join(fakeBinDir, 'tmux.log');
@@ -1942,7 +1942,7 @@ esac
       await shutdownTeam('team-shutdown-exclusions', cwd, { force: true });
       const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
       assert.doesNotMatch(tmuxLog, /kill-pane -t %11/);
-      assert.doesNotMatch(tmuxLog, /kill-pane -t %12/);
+      assert.match(tmuxLog, /kill-pane -t %12/);
       assert.match(tmuxLog, /kill-pane -t %13/);
     } finally {
       if (typeof previousPath === 'string') process.env.PATH = previousPath;

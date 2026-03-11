@@ -1757,6 +1757,9 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
       leaderPaneId,
       hudPaneId,
     });
+    if (hudPaneId) {
+      await killWorkerByPaneIdAsync(hudPaneId, leaderPaneId ?? undefined);
+    }
 
     // 4. Destroy tmux session
     if (!sessionName.includes(':')) {
