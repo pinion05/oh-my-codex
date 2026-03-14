@@ -4,6 +4,9 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **Team event/docs contract now spells out wakeable vs audit-only signals more clearly** — the interop contract now documents canonical event reads, durable-but-non-wakeable merge/diff reports, and continued `worker_merge_conflict` compatibility for actionable integration conflicts; the team allocation reference now reflects the current lane-aware startup heuristic and `allocation_reason` review seam.
+
 ## [0.9.0] - 2026-03-12
 
 55 non-merge commits from `v0.8.15..dev`. Contributors: [@Yeachan-Heo](https://github.com/Yeachan-Heo/oh-my-codex), Bellman, 2233admin, [@seunghwaneom](https://github.com/seunghwaneom), [@hoky1227](https://github.com/hoky1227).

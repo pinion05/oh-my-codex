@@ -6,8 +6,9 @@ This note documents the current team-mode allocation/rebalance seam and the cons
 
 ### Startup allocation
 - `buildTeamExecutionPlan()` splits the top-level request, routes each subtask to a role, then assigns owners via `distributeTasksToWorkers()`.
-- Ownership is still strict round-robin today (`src/cli/team.ts:402-435`, `src/cli/team.ts:535-543`).
-- Atomic tasks fan out into the fixed aspect trio: implement, test, review/document (`src/cli/team.ts:512-533`).
+- Ownership now flows through `allocateTasksToWorkers()` so startup assignment stays lane-aware instead of pure round-robin (`src/cli/team.ts`, `src/team/allocation-policy.ts`).
+- The current heuristic keeps same-role work grouped when possible, prefers explicit worker-role matches, and falls back to load balancing with lighter-lane bias for blocked work.
+- Atomic tasks still fan out into the fixed aspect trio: implement, test, review/document, but each lane now carries an `allocation_reason` for traceability before CLI output strips the internal field.
 
 ### Runtime monitoring
 - `monitorTeam()` already gathers the signals needed for rebalance decisions: task inventory, lease expiry, worker liveness, worker status, heartbeat turn counts, and verification evidence gaps (`src/team/runtime.ts:1212-1420`).
@@ -48,3 +49,4 @@ To keep the upgrade incremental and reversible, separate **signal collection** f
 - The code already has good low-level claim primitives; the main gap is decision logic, not transport.
 - The clearest review risk is letting new heuristics bypass `assignTask()`/claim safety. Any rebalance helper should return a decision, not perform ad-hoc mutation.
 - Startup assignment and runtime rebalance should stay small, explicit policy seams so `src/cli/team.ts` and `src/team/runtime.ts` do not absorb another large block of inline heuristics.
+- `allocation_reason` should remain explainable enough for tests, snapshots, and leader review even if the public task payload hides the internal field after planning.
