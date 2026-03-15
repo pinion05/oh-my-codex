@@ -90,6 +90,27 @@ describe('worktree parser', () => {
   });
 });
 
+describe('worktree planning', () => {
+  it('plans dedicated autoresearch branch and path naming', async () => {
+    const repo = await initRepo();
+    try {
+      const planned = planWorktreeTarget({
+        cwd: repo,
+        scope: 'autoresearch' as never,
+        mode: { enabled: true, detached: false, name: 'demo-mission' },
+        worktreeTag: '20260314T000000Z',
+      });
+      assert.equal(planned.enabled, true);
+      if (!planned.enabled) return;
+
+      assert.equal(planned.branchName, 'autoresearch/demo-mission/20260314t000000z');
+      assert.match(planned.worktreePath.replace(/\\/g, '/'), /\.omx-worktrees\/autoresearch-demo-mission-20260314t000000z$/);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('worktree ensure + rollback', () => {
   it('creates and reuses detached worktree idempotently', async () => {
     const repo = await initRepo();

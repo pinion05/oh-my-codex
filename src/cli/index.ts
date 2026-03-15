@@ -20,6 +20,7 @@ import { exploreCommand } from './explore.js';
 import { sparkshellCommand } from './sparkshell.js';
 import { agentsInitCommand } from './agents-init.js';
 import { sessionCommand } from './session-search.js';
+import { autoresearchCommand } from './autoresearch.js';
 import {
   MADMAX_FLAG,
   CODEX_BYPASS_FLAG,
@@ -105,6 +106,7 @@ Usage:
                 Alias for agents-init (lightweight AGENTS bootstrap only)
   omx team      Spawn parallel worker panes in tmux and bootstrap inbox/task state
   omx ralph     Launch Codex with ralph persistence mode active
+  omx autoresearch Launch thin-supervisor autoresearch with keep/discard/reset parity
   omx version   Show version information
   omx tmux-hook Manage tmux prompt injection workaround (init|status|validate|test)
   omx hooks     Manage hook plugins (init|status|validate|test)
@@ -156,6 +158,7 @@ const TEAM_WORKER_LAUNCH_ARGS_ENV = 'OMX_TEAM_WORKER_LAUNCH_ARGS';
 const TEAM_INHERIT_LEADER_FLAGS_ENV = 'OMX_TEAM_INHERIT_LEADER_FLAGS';
 const OMX_BYPASS_DEFAULT_SYSTEM_PROMPT_ENV = 'OMX_BYPASS_DEFAULT_SYSTEM_PROMPT';
 const OMX_MODEL_INSTRUCTIONS_FILE_ENV = 'OMX_MODEL_INSTRUCTIONS_FILE';
+const OMX_AUTORESEARCH_APPEND_INSTRUCTIONS_FILE_ENV = 'OMX_AUTORESEARCH_APPEND_INSTRUCTIONS_FILE';
 const REASONING_MODES = ['low', 'medium', 'high', 'xhigh'] as const;
 type ReasoningMode = typeof REASONING_MODES[number];
 const REASONING_MODE_SET = new Set<string>(REASONING_MODES);
@@ -171,6 +174,7 @@ type CliCommand = 'launch' | 'exec' | 'setup' | 'agents-init' | 'deepinit' | 'un
 
 const NESTED_HELP_COMMANDS = new Set<CliCommand>([
   'ask',
+  'autoresearch',
   'agents-init',
   'deepinit',
   'exec',
@@ -479,7 +483,7 @@ export function buildHudPaneCleanupTargets(existingPaneIds: string[], createdPan
 
 export async function main(args: string[]): Promise<void> {
   const knownCommands = new Set([
-    'launch', 'exec', 'setup', 'agents-init', 'deepinit', 'uninstall', 'doctor', 'ask', 'explore', 'sparkshell', 'team', 'ralph', 'session', 'resume', 'version', 'tmux-hook', 'hooks', 'hud', 'status', 'cancel', 'help', '--help', '-h',
+    'launch', 'exec', 'setup', 'agents-init', 'deepinit', 'uninstall', 'doctor', 'ask', 'autoresearch', 'explore', 'sparkshell', 'team', 'ralph', 'session', 'resume', 'version', 'tmux-hook', 'hooks', 'hud', 'status', 'cancel', 'help', '--help', '-h',
   ]);
   const firstArg = args[0];
   const { command, launchArgs } = resolveCliInvocation(args);
@@ -535,6 +539,9 @@ export async function main(args: string[]): Promise<void> {
       }
       case 'ask':
         await askCommand(args.slice(1));
+        break;
+      case 'autoresearch':
+        await autoresearchCommand(args.slice(1));
         break;
       case 'explore':
         await exploreCommand(args.slice(1));
@@ -1202,6 +1209,16 @@ export function buildDetachedSessionRollbackSteps(
 }
 
 
+async function readAutoresearchAppendInstructions(): Promise<string> {
+  const appendixPath = process.env[OMX_AUTORESEARCH_APPEND_INSTRUCTIONS_FILE_ENV]?.trim();
+  if (!appendixPath) return '';
+  if (!existsSync(appendixPath)) {
+    throw new Error(`autoresearch instructions file not found: ${appendixPath}`);
+  }
+  const { readFile } = await import('fs/promises');
+  return (await readFile(appendixPath, 'utf-8')).trim();
+}
+
 export function buildNotifyTempStartupMessages(
   contract: NotifyTempContract,
   hasValidProviders: boolean,
@@ -1245,7 +1262,13 @@ async function preLaunch(cwd: string, sessionId: string, notifyTempContract?: No
   // 2. Generate runtime overlay + write session-scoped model instructions file
   const orchestrationMode = await resolveSessionOrchestrationMode(cwd, sessionId);
   const overlay = await generateOverlay(cwd, sessionId, { orchestrationMode });
-  await writeSessionModelInstructionsFile(cwd, sessionId, overlay);
+  const autoresearchAppendix = await readAutoresearchAppendInstructions();
+  const sessionInstructions = autoresearchAppendix
+    ? `${overlay}
+
+${autoresearchAppendix}`
+    : overlay;
+  await writeSessionModelInstructionsFile(cwd, sessionId, sessionInstructions);
 
   // 3. Write session state
   await resetSessionMetrics(cwd);

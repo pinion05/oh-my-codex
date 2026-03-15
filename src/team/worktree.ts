@@ -17,15 +17,16 @@ export interface ParsedWorktreeMode {
 
 export interface WorktreePlanInput {
   cwd: string;
-  scope: 'launch' | 'team';
+  scope: 'launch' | 'team' | 'autoresearch';
   mode: WorktreeMode;
   teamName?: string;
   workerName?: string;
+  worktreeTag?: string;
 }
 
 export interface PlannedWorktreeTarget {
   enabled: true;
-  scope: 'launch' | 'team';
+  scope: 'launch' | 'team' | 'autoresearch';
   repoRoot: string;
   worktreePath: string;
   detached: boolean;
@@ -118,6 +119,30 @@ function isWorktreeDirty(worktreePath: string): boolean {
   return (result.stdout || '').trim() !== '';
 }
 
+export function readWorkspaceStatusLines(cwd: string): string[] {
+  const result = spawnSync('git', ['status', '--porcelain', '--untracked-files=all'], {
+    cwd,
+    encoding: 'utf-8',
+  });
+  if (result.status !== 0) {
+    const stderr = (result.stderr || '').trim();
+    throw new Error(stderr || `workspace_status_failed:${cwd}`);
+  }
+  return (result.stdout || '')
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter(Boolean);
+}
+
+export function assertCleanLeaderWorkspaceForWorkerWorktrees(cwd: string): void {
+  const lines = readWorkspaceStatusLines(cwd);
+  if (lines.length === 0) return;
+  const preview = lines.slice(0, 8).join(' | ');
+  throw new Error(
+    `leader_workspace_dirty_for_worktrees:${resolve(cwd)}:${preview}:commit_or_stash_before_omx_team`,
+  );
+}
+
 function listWorktrees(repoRoot: string): GitWorktreeEntry[] {
   const raw = readGit(repoRoot, ['worktree', 'list', '--porcelain']);
   if (!raw) return [];
@@ -156,6 +181,11 @@ function resolveBranchName(input: WorktreePlanInput): string | null {
     return input.mode.name;
   }
 
+  if (input.scope === 'autoresearch') {
+    const runTag = sanitizePathToken(input.worktreeTag || 'run');
+    return `autoresearch/${sanitizePathToken(input.mode.name)}/${runTag}`;
+  }
+
   const workerName = (input.workerName || '').trim();
   if (!workerName) {
     throw new Error('team_worktree_worker_name_required');
@@ -173,6 +203,14 @@ function resolveWorktreePath(input: WorktreePlanInput, repoRoot: string): string
       return join(parent, bucket, 'launch-detached');
     }
     return join(parent, bucket, `launch-${sanitizePathToken(input.mode.name)}`);
+  }
+
+  if (input.scope === 'autoresearch') {
+    if (!input.mode.enabled || input.mode.detached) {
+      throw new Error('autoresearch_worktree_requires_named_mode');
+    }
+    const runTag = sanitizePathToken(input.worktreeTag || 'run');
+    return join(parent, bucket, `autoresearch-${sanitizePathToken(input.mode.name)}-${runTag}`);
   }
 
   const teamName = sanitizePathToken(input.teamName || 'team');

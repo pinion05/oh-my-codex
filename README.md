@@ -269,6 +269,7 @@ omx ask ...        # Ask local provider advisor (claude|gemini), writes .omx/art
 omx resume         # Resume a previous interactive Codex session
 omx explore ...    # Default read-only exploration entrypoint (may use sparkshell backend)
 omx ralph          # Launch Codex with ralph persistence mode active
+omx autoresearch <mission-dir> # Launch thin-supervisor autoresearch with keep/discard/reset parity
 omx status         # Show active modes
 omx cancel         # Cancel active execution modes
 omx reasoning <mode> # low|medium|high|xhigh
@@ -299,11 +300,33 @@ omx explore --prompt-file prompts/explore-task.md
 USE_OMX_EXPLORE_CMD=1 omx   # advisory preference for simple read-only exploration prompts
 ```
 
+Autoresearch command example:
+
+```bash
+mkdir -p missions/demo
+cat > missions/demo/mission.md <<'EOF'
+# Mission
+Solve the scoped task in this repository.
+EOF
+cat > missions/demo/sandbox.md <<'EOF'
+---
+evaluator:
+  command: node scripts/eval.js
+  format: json
+---
+Stay inside the mission boundary and stop when the evaluator passes.
+EOF
+omx autoresearch missions/demo
+```
+
+`omx autoresearch` now runs as a thin supervisor around one Codex experiment session at a time. A fresh launch creates a run-tagged `autoresearch/<slug>/<run-tag>` worktree lane, seeds the baseline evaluator row, writes authoritative per-run artifacts under `.omx/logs/autoresearch/<run-id>/`, and expects the session to hand back a repo-root `candidate.json` artifact. Each iteration's bootstrap instructions include the current baseline/last-kept state plus a bounded recent ledger summary, and `status=candidate` artifacts must point at the current worktree `HEAD` and last-kept base commit. After each session exit, OMX evaluates the candidate, records keep/discard/reset state, hard-resets discarded or ambiguous experiments back to the last kept commit, and relaunches the next iteration unless the run aborts. Use `omx autoresearch --resume <run-id>` to continue an existing run from its manifest/worktree.
+
 `omx explore` is the default OMX surface for simple read-only exploration. It stays intentionally read-only and shell-only, and qualifying shell-native read-only tasks may be routed through `omx sparkshell` as a backend when that is the cheaper/more direct fit. The routing flag only adds advisory steering in generated session instructions; ambiguous or implementation-heavy requests stay on the normal Codex path, and OMX falls back normally if the explore harness is unavailable. The harness constrains Codex through a temporary allowlisted shell/bin layer so only approved repository-inspection command families are available during the offloaded run.
 
 - Current shell allowlist: `rg`, `grep`, `ls`, `find`, `wc`, `cat`, `head`, `tail`, `pwd`, `printf`
 - Current shell restrictions: no pipes, redirection, `&&`, `||`, `;`, subshells, path-qualified binaries, non-allowlisted commands, stdin-fed inspection, or path escapes outside the target repository (including existing symlink-resolved escapes)
 - `omx explore` is **not** a full parity surface for modern Codex read-only mode: it does not promise web search, MCP, images, or general-purpose tool access
+
 
 Packaging / install notes:
 

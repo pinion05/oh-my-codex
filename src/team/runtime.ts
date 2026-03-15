@@ -113,6 +113,7 @@ import { hasStructuredVerificationEvidence } from '../verification/verifier.js';
 import { buildRebalanceDecisions } from './rebalance-policy.js';
 import { readModeState, updateModeState } from '../modes/base.js';
 import {
+  assertCleanLeaderWorkspaceForWorkerWorktrees,
   ensureWorktree,
   isGitRepository,
   planWorktreeTarget,
@@ -1184,6 +1185,7 @@ export async function startTeam(
   }
 
   if (activeWorktreeMode) {
+    assertCleanLeaderWorkspaceForWorkerWorktrees(leaderCwd);
     for (let i = 1; i <= workerCount; i++) {
       const workerName = `worker-${i}`;
       const planned = planWorktreeTarget({

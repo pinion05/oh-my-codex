@@ -617,6 +617,40 @@ sleep 5
     }
   });
 
+  it('startTeam rejects dirty leader workspace before provisioning worker worktrees', async () => {
+    const repo = await initRepo();
+    const prevLaunchMode = process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
+    await writeFile(join(repo, 'README.md'), 'dirty\n', 'utf-8');
+    await writeFile(join(repo, 'notes.txt'), 'local only\n', 'utf-8');
+    try {
+      process.env.OMX_TEAM_WORKER_LAUNCH_MODE = 'prompt';
+      await assert.rejects(
+        () => withoutTeamWorkerEnv(() =>
+          startTeam(
+            'team-dirty-preflight',
+            'reject dirty leader workspace',
+            'executor',
+            1,
+            [{ subject: 's', description: 'd', owner: 'worker-1' }],
+            repo,
+            { worktreeMode: { enabled: true, detached: true, name: null } },
+          )),
+        /leader_workspace_dirty_for_worktrees:.*M README\.md.*\?\? notes\.txt.*commit_or_stash_before_omx_team/s,
+      );
+
+      const listedWorktrees = execFileSync('git', ['worktree', 'list', '--porcelain'], {
+        cwd: repo,
+        encoding: 'utf-8',
+      });
+      assert.doesNotMatch(listedWorktrees, /team-team-dirty-preflight-worker-1/);
+      assert.equal(existsSync(join(repo, '.omx', 'state', 'team', 'team-dirty-preflight')), false);
+    } finally {
+      if (typeof prevLaunchMode === 'string') process.env.OMX_TEAM_WORKER_LAUNCH_MODE = prevLaunchMode;
+      else delete process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
   it('startTeam launches gemini workers with startup prompt and no default model passthrough', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-gemini-'));
     const binDir = join(cwd, 'bin');
@@ -1098,9 +1132,10 @@ exit 0
 
   it('startTeam routes detached worktree worker inbox and mailbox triggers through leader-root state references', async () => {
     const repo = await initRepo();
-    const binDir = join(repo, 'bin');
+    const toolingDir = await mkdtemp(join(tmpdir(), 'omx-runtime-worktree-tools-'));
+    const binDir = join(toolingDir, 'bin');
     const fakeCodexPath = join(binDir, 'codex');
-    const logDir = join(repo, 'worker-logs');
+    const logDir = join(toolingDir, 'worker-logs');
     const stdinLogPath = join(logDir, 'stdin.log');
     const envLogPath = join(logDir, 'env.json');
     await mkdir(binDir, { recursive: true });
@@ -1203,13 +1238,15 @@ process.on('SIGTERM', () => process.exit(0));
       else delete process.env.OMX_TEAM_WORKER_CLI;
       if (typeof prevLogDir === 'string') process.env.OMX_TEST_LOG_DIR = prevLogDir;
       else delete process.env.OMX_TEST_LOG_DIR;
+      await rm(toolingDir, { recursive: true, force: true });
       await rm(repo, { recursive: true, force: true });
     }
   });
 
   it('shutdownTeam removes team-created detached worktrees on normal shutdown', async () => {
     const repo = await initRepo();
-    const binDir = join(repo, 'bin');
+    const toolingDir = await mkdtemp(join(tmpdir(), 'omx-runtime-worktree-tools-'));
+    const binDir = join(toolingDir, 'bin');
     const fakeCodexPath = join(binDir, 'codex');
     await mkdir(binDir, { recursive: true });
     await writeFile(
@@ -1267,17 +1304,17 @@ process.on('SIGTERM', () => process.exit(0));
       else delete process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
       if (typeof prevWorkerCli === 'string') process.env.OMX_TEAM_WORKER_CLI = prevWorkerCli;
       else delete process.env.OMX_TEAM_WORKER_CLI;
+      await rm(toolingDir, { recursive: true, force: true });
       await rm(repo, { recursive: true, force: true });
     }
   });
 
   it('resumeTeam preserves detached worktree metadata for live prompt workers', async () => {
     const repo = await initRepo();
-    const binDir = join(repo, 'bin');
+    const binDir = await mkdtemp(join(tmpdir(), 'omx-runtime-prompt-bin-'));
     const fakeCodexPath = join(binDir, 'codex');
-    const logDir = join(repo, 'worker-logs');
+    const logDir = await mkdtemp(join(tmpdir(), 'omx-runtime-prompt-logs-'));
     const envLogPath = join(logDir, 'env.json');
-    await mkdir(binDir, { recursive: true });
     await writeFile(
       fakeCodexPath,
       `#!/usr/bin/env node
@@ -1376,6 +1413,8 @@ process.on('SIGTERM', () => process.exit(0));
       else delete process.env.OMX_TEAM_WORKER_CLI;
       if (typeof prevLogDir === 'string') process.env.OMX_TEST_LOG_DIR = prevLogDir;
       else delete process.env.OMX_TEST_LOG_DIR;
+      await rm(binDir, { recursive: true, force: true });
+      await rm(logDir, { recursive: true, force: true });
       await rm(repo, { recursive: true, force: true });
     }
   });

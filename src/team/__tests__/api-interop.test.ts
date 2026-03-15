@@ -26,8 +26,17 @@ import {
 
 async function setupTeam(name: string): Promise<{ cwd: string; cleanup: () => Promise<void> }> {
   const cwd = await mkdtemp(join(tmpdir(), `omx-interop-${name}-`));
+  const previousTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+  delete process.env.OMX_TEAM_STATE_ROOT;
   await initTeamState(name, 'test task', 'executor', 2, cwd);
-  return { cwd, cleanup: () => rm(cwd, { recursive: true, force: true }) };
+  return {
+    cwd,
+    cleanup: async () => {
+      if (typeof previousTeamStateRoot === 'string') process.env.OMX_TEAM_STATE_ROOT = previousTeamStateRoot;
+      else delete process.env.OMX_TEAM_STATE_ROOT;
+      await rm(cwd, { recursive: true, force: true });
+    },
+  };
 }
 
 // ─── resolveTeamApiOperation ──────────────────────────────────────────────

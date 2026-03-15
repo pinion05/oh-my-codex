@@ -23,7 +23,7 @@ export interface ModeState {
   [key: string]: unknown;
 }
 
-export type ModeName = 'autopilot' | 'ralph' | 'ultrawork' | 'team' | 'ultraqa' | 'ralplan';
+export type ModeName = 'autopilot' | 'autoresearch' | 'ralph' | 'ultrawork' | 'team' | 'ultraqa' | 'ralplan';
 
 /** @deprecated These mode names were removed in v4.6. Use the canonical modes instead. */
 export type DeprecatedModeName = 'ultrapilot' | 'pipeline' | 'ecomode';
@@ -44,7 +44,7 @@ export function getDeprecationWarning(mode: string): string | null {
   return `[DEPRECATED] Mode "${mode}" is deprecated. ${warning}`;
 }
 
-const EXCLUSIVE_MODES: ModeName[] = ['autopilot', 'ralph', 'ultrawork'];
+const EXCLUSIVE_MODES: ModeName[] = ['autopilot', 'autoresearch', 'ralph', 'ultrawork'];
 
 function normalizeRalphModeStateOrThrow(state: ModeState): ModeState {
   const originalPhase = state.current_phase;
@@ -71,6 +71,33 @@ function statePath(mode: string, projectRoot?: string): string {
   return join(stateDir(projectRoot), `${mode}-state.json`);
 }
 
+export async function assertModeStartAllowed(
+  mode: ModeName,
+  projectRoot?: string,
+): Promise<void> {
+  if (!EXCLUSIVE_MODES.includes(mode)) return;
+
+  for (const other of EXCLUSIVE_MODES) {
+    if (other === mode) continue;
+    const otherPath = statePath(other, projectRoot);
+    if (!existsSync(otherPath)) continue;
+    try {
+      const raw = await readFile(otherPath, 'utf-8');
+      const otherState = JSON.parse(raw) as { active?: unknown };
+      if (otherState.active) {
+        throw new Error(`Cannot start ${mode}: ${other} is already active. Run cancel first.`);
+      }
+    } catch (e) {
+      const err = e as NodeJS.ErrnoException;
+      if (err?.message.includes('Cannot start')) throw err;
+      if (err?.code === 'ENOENT') continue;
+      throw new Error(
+        `Cannot start ${mode}: ${other} state file is malformed or unreadable (${otherPath}). Run cancel or repair the state file.`
+      );
+    }
+  }
+}
+
 /**
  * Start a mode. Checks for exclusive mode conflicts.
  */
@@ -83,29 +110,7 @@ export async function startMode(
   const dir = stateDir(projectRoot);
   await mkdir(dir, { recursive: true });
 
-  // Check for exclusive mode conflicts
-  if (EXCLUSIVE_MODES.includes(mode)) {
-    for (const other of EXCLUSIVE_MODES) {
-      if (other === mode) continue;
-      const otherPath = statePath(other, projectRoot);
-      if (existsSync(otherPath)) {
-        try {
-          const raw = await readFile(otherPath, 'utf-8');
-          const otherState = JSON.parse(raw) as { active?: unknown };
-          if (otherState.active) {
-            throw new Error(`Cannot start ${mode}: ${other} is already active. Run cancel first.`);
-          }
-        } catch (e) {
-          const err = e as NodeJS.ErrnoException;
-          if (err?.message.includes('Cannot start')) throw err;
-          if (err?.code === 'ENOENT') continue;
-          throw new Error(
-            `Cannot start ${mode}: ${other} state file is malformed or unreadable (${otherPath}). Run cancel or repair the state file.`
-          );
-        }
-      }
-    }
-  }
+  await assertModeStartAllowed(mode, projectRoot);
 
   const stateBase: ModeState = {
     active: true,

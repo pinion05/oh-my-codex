@@ -292,7 +292,7 @@ describe('resolveTeamWorkerLaunchArgsEnv (spark)', () => {
 
 describe('commandOwnsLocalHelp', () => {
   it('returns true for nested commands that render their own help output', () => {
-    for (const command of ['agents-init', 'ask', 'deepinit', 'hooks', 'hud', 'ralph', 'resume', 'session', 'sparkshell', 'team', 'tmux-hook']) {
+    for (const command of ['agents-init', 'ask', 'autoresearch', 'deepinit', 'hooks', 'hud', 'ralph', 'resume', 'session', 'sparkshell', 'team', 'tmux-hook']) {
       assert.equal(commandOwnsLocalHelp(command), true, `expected ${command} to own local help`);
     }
   });
@@ -315,6 +315,13 @@ describe('resolveCliInvocation', () => {
   it('resolves ask to ask command', () => {
     assert.deepEqual(resolveCliInvocation(['ask', 'claude', 'hello']), {
       command: 'ask',
+      launchArgs: [],
+    });
+  });
+
+  it('resolves autoresearch to autoresearch command', () => {
+    assert.deepEqual(resolveCliInvocation(['autoresearch', 'missions/demo']), {
+      command: 'autoresearch',
       launchArgs: [],
     });
   });
