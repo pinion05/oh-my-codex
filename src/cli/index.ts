@@ -1700,12 +1700,10 @@ function runCodex(
 
     const activePaneId = process.env.TMUX_PANE?.trim();
     if (activePaneId) {
-      let tmuxSessionName: string | undefined;
       try {
-        const displayArgs = ["display-message", "-p", "-t", activePaneId, "#S"];
-        tmuxSessionName =
-          execFileSync("tmux", displayArgs, { encoding: "utf-8" }).trim() ||
-          undefined;
+        execFileSync("tmux", ["display-message", "-p", "-t", activePaneId, "#S"], {
+          encoding: "utf-8",
+        });
       } catch {}
     }
 
@@ -1734,7 +1732,6 @@ function runCodex(
     const tmuxSessionId = `omx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const sessionName = buildTmuxSessionName(cwd, tmuxSessionId);
     let createdDetachedSession = false;
-    let detachedLeaderPaneId: string | null = null;
     let registeredHookTarget: string | null = null;
     let registeredHookName: string | null = null;
     let registeredClientAttachedHookName: string | null = null;
@@ -1756,7 +1753,7 @@ function runCodex(
         });
         if (step.name === "new-session") {
           createdDetachedSession = true;
-          detachedLeaderPaneId = parsePaneIdFromTmuxOutput(output || "");
+          parsePaneIdFromTmuxOutput(output || "");
         }
         if (step.name === "split-and-capture-hud-pane") {
           const hudPaneId = parsePaneIdFromTmuxOutput(output || "");
