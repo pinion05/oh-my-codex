@@ -29,6 +29,7 @@ import {
   omxLogsDir,
 } from "../utils/paths.js";
 import { buildMergedConfig, getRootModelName } from "../config/generator.js";
+import { buildManagedCodexHooksConfig } from "../config/codex-hooks.js";
 import {
   getLegacyUnifiedMcpRegistryCandidate,
   getUnifiedMcpRegistryCandidates,
@@ -82,6 +83,7 @@ export type SetupScope = (typeof SETUP_SCOPES)[number];
 export interface ScopeDirectories {
   codexConfigFile: string;
   codexHomeDir: string;
+  codexHooksFile: string;
   nativeAgentsDir: string;
   promptsDir: string;
   skillsDir: string;
@@ -385,6 +387,7 @@ export function resolveScopeDirectories(
     return {
       codexConfigFile: join(codexHomeDir, "config.toml"),
       codexHomeDir,
+      codexHooksFile: join(codexHomeDir, "hooks.json"),
       nativeAgentsDir: join(codexHomeDir, "agents"),
       promptsDir: join(codexHomeDir, "prompts"),
       skillsDir: join(codexHomeDir, "skills"),
@@ -393,6 +396,7 @@ export function resolveScopeDirectories(
   return {
     codexConfigFile: codexConfigPath(),
     codexHomeDir: codexHome(),
+    codexHooksFile: join(codexHome(), "hooks.json"),
     nativeAgentsDir: codexAgentsDir(),
     promptsDir: codexPromptsDir(),
     skillsDir: userSkillsDir(),
@@ -831,6 +835,23 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
     );
   }
   console.log(`  Config refresh complete (${scopeDirs.codexConfigFile}).\n`);
+
+  const hooksConfig = JSON.stringify(
+    buildManagedCodexHooksConfig(pkgRoot),
+    null,
+    2,
+  ) + "\n";
+  await syncManagedContent(
+    hooksConfig,
+    scopeDirs.codexHooksFile,
+    summary.config,
+    backupContext,
+    { dryRun, verbose },
+    `native hooks ${scopeDirs.codexHooksFile}`,
+  );
+  console.log(
+    `  Native Codex hooks refresh complete (${scopeDirs.codexHooksFile}).\n`,
+  );
 
   // Step 5.5: Verify team CLI interop surface is available.
   console.log("[5.5/8] Verifying Team CLI API interop...");

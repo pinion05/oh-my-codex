@@ -161,9 +161,16 @@ omx team shutdown <team-name>
 ### Setup, doctor, and HUD
 
 These are operator/support surfaces:
-- `omx setup` installs prompts, skills, config, and AGENTS scaffolding
+- `omx setup` installs prompts, skills, AGENTS scaffolding, `.codex/config.toml`, and OMX-managed native Codex hooks in `.codex/hooks.json`
 - `omx doctor` verifies the install when something seems wrong
 - `omx hud --watch` is a monitoring/status surface, not the primary user workflow
+
+For non-team sessions, native Codex hooks are now the canonical lifecycle surface:
+- `.codex/hooks.json` = native Codex hook registrations
+- `.omx/hooks/*.mjs` = OMX plugin hooks
+- `omx tmux-hook` / notify-hook / derived watcher = tmux + runtime fallback paths
+
+See [Codex native hook mapping](./docs/codex-native-hooks.md) for the current native / fallback matrix.
 
 ### Explore and sparkshell
 
@@ -208,6 +215,7 @@ If this happens, try:
 - [Demo guide](./DEMO.md)
 - [Agent catalog](./docs/agents.html)
 - [Skills reference](./docs/skills.html)
+- [Codex native hook mapping](./docs/codex-native-hooks.md)
 - [Integrations](./docs/integrations.html)
 - [OpenClaw / notification gateway guide](./docs/openclaw-integration.md)
 - [Contributing](./CONTRIBUTING.md)
