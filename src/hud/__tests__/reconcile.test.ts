@@ -28,12 +28,13 @@ describe('reconcileHudForPromptSubmit', () => {
         resized.push({ paneId, heightLines });
         return true;
       },
-      resolveOmxEntryPath: () => '/repo/dist/index.js',
+      resolveOmxCliEntryPath: () => '/repo/dist/cli/omx.js',
     });
 
     assert.equal(result.status, 'recreated');
     assert.equal(result.paneId, '%9');
     assert.equal(created.length, 1);
+    assert.match(created[0]?.cmd || '', /\/repo\/dist\/cli\/omx\.js' hud --watch/);
     assert.equal(created[0]?.options?.heightLines, 3);
     assert.equal(resized.length, 1);
     assert.equal(resized[0]?.heightLines, 3);
@@ -60,7 +61,7 @@ describe('reconcileHudForPromptSubmit', () => {
         return '%9';
       },
       resizeTmuxPane: () => true,
-      resolveOmxEntryPath: () => '/repo/dist/index.js',
+      resolveOmxCliEntryPath: () => '/repo/dist/cli/omx.js',
     });
 
     assert.equal(result.status, 'replaced_duplicates');
@@ -79,7 +80,7 @@ describe('reconcileHudForPromptSubmit', () => {
         resized.push({ paneId, heightLines });
         return true;
       },
-      resolveOmxEntryPath: () => '/repo/dist/index.js',
+      resolveOmxCliEntryPath: () => '/repo/dist/cli/omx.js',
     });
 
     assert.equal(result.status, 'resized');

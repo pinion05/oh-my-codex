@@ -10,7 +10,7 @@ import {
   resizeTmuxPane,
   type TmuxPaneSnapshot,
 } from './tmux.js';
-import { resolveOmxEntryPath } from '../utils/paths.js';
+import { resolveOmxCliEntryPath } from '../utils/paths.js';
 
 export interface ReconcileHudForPromptSubmitResult {
   status:
@@ -36,7 +36,7 @@ export interface ReconcileHudForPromptSubmitDeps {
   killTmuxPane?: (paneId: string) => boolean;
   resizeTmuxPane?: (paneId: string, heightLines: number) => boolean;
   readHudConfig?: typeof readHudConfig;
-  resolveOmxEntryPath?: typeof resolveOmxEntryPath;
+  resolveOmxCliEntryPath?: typeof resolveOmxCliEntryPath;
 }
 
 export async function reconcileHudForPromptSubmit(
@@ -53,8 +53,8 @@ export async function reconcileHudForPromptSubmit(
     };
   }
 
-  const resolveOmxEntryPathFn = deps.resolveOmxEntryPath ?? resolveOmxEntryPath;
-  const omxBin = resolveOmxEntryPathFn();
+  const resolveOmxCliEntryPathFn = deps.resolveOmxCliEntryPath ?? resolveOmxCliEntryPath;
+  const omxBin = resolveOmxCliEntryPathFn();
   if (!omxBin) {
     return {
       status: 'skipped_no_entry',

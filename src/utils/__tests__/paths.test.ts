@@ -22,6 +22,7 @@ import {
   OMX_ENTRY_PATH_ENV,
   OMX_STARTUP_CWD_ENV,
   rememberOmxLaunchContext,
+  resolveOmxCliEntryPath,
   resolveOmxEntryPath,
 } from "../paths.js";
 
@@ -459,6 +460,59 @@ describe("OMX launcher path resolution", () => {
 
       assert.equal(process.env[OMX_STARTUP_CWD_ENV], startupCwd);
       assert.equal(process.env[OMX_ENTRY_PATH_ENV], launcherPath);
+    } finally {
+      await rm(startupCwd, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to the packaged CLI entry when argv1 points at a non-CLI script", async () => {
+    const startupCwd = await mkdtemp(join(tmpdir(), "omx-launcher-cli-fallback-start-"));
+    const packageRootDir = await mkdtemp(join(tmpdir(), "omx-launcher-cli-fallback-root-"));
+    try {
+      const hookDir = join(startupCwd, "dist", "scripts");
+      const hookPath = join(hookDir, "codex-native-hook.js");
+      const cliDir = join(packageRootDir, "dist", "cli");
+      const cliPath = join(cliDir, "omx.js");
+      await mkdir(hookDir, { recursive: true });
+      await mkdir(cliDir, { recursive: true });
+      await writeFile(hookPath, "#!/usr/bin/env node\n", "utf-8");
+      await writeFile(cliPath, "#!/usr/bin/env node\n", "utf-8");
+
+      const resolved = resolveOmxCliEntryPath({
+        argv1: "dist/scripts/codex-native-hook.js",
+        cwd: startupCwd,
+        env: {
+          ...process.env,
+          [OMX_STARTUP_CWD_ENV]: startupCwd,
+        },
+        packageRootDir,
+      });
+
+      assert.equal(resolved, cliPath);
+    } finally {
+      await rm(startupCwd, { recursive: true, force: true });
+      await rm(packageRootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the resolved path when argv1 already points at the CLI entry", async () => {
+    const startupCwd = await mkdtemp(join(tmpdir(), "omx-launcher-cli-direct-start-"));
+    try {
+      const cliDir = join(startupCwd, "dist", "cli");
+      const cliPath = join(cliDir, "omx.js");
+      await mkdir(cliDir, { recursive: true });
+      await writeFile(cliPath, "#!/usr/bin/env node\n", "utf-8");
+
+      const resolved = resolveOmxCliEntryPath({
+        argv1: "dist/cli/omx.js",
+        cwd: startupCwd,
+        env: {
+          ...process.env,
+          [OMX_STARTUP_CWD_ENV]: startupCwd,
+        },
+      });
+
+      assert.equal(resolved, cliPath);
     } finally {
       await rm(startupCwd, { recursive: true, force: true });
     }
