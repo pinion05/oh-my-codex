@@ -25,6 +25,14 @@ const MIN_MAX_ISSUES_PER_RUN = 1;
 const MAX_MAX_ISSUES_PER_RUN = 100;
 const DAEMON_IDENTITY_MARKER = "runOmxDaemonLoop";
 const DEFAULT_KNOWLEDGE_SINK = "docs/project-wiki";
+const DAEMON_GITIGNORE_ENTRIES = [
+  ".omx/*",
+  "!.omx/daemon/",
+  ".omx/daemon/*",
+  "!.omx/daemon/*.md",
+  "!.omx/daemon/daemon.config.json",
+] as const;
+const LEGACY_DAEMON_GITIGNORE_ENTRIES = [".omx/"] as const;
 
 export type GitHubCredentialSource = "config-token-ref" | "env" | "gh-auth";
 export type QueueItemStatus = "queued" | "approved" | "rejected" | "published";
@@ -260,6 +268,37 @@ function normalizeInteger(value: unknown, fallback: number, min: number, max: nu
   return numeric;
 }
 
+function hasGitignoreEntry(content: string, entry: string): boolean {
+  return content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .some((line) => line === entry);
+}
+
+function stripLegacyGitignoreEntries(content: string, legacyEntries: readonly string[]): { content: string; removed: boolean } {
+  const legacyEntrySet = new Set(legacyEntries);
+  const lines = content.split(/\r?\n/);
+  const filteredLines = lines.filter((line) => !legacyEntrySet.has(line.trim()));
+  const removed = filteredLines.length !== lines.length;
+  return {
+    content: filteredLines.join("\n").replace(/\n+$/, "\n"),
+    removed,
+  };
+}
+
+function ensureDaemonGitignore(projectRoot: string): boolean {
+  const gitignorePath = join(projectRoot, ".gitignore");
+  const existing = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf-8") : "";
+  const normalized = stripLegacyGitignoreEntries(existing, LEGACY_DAEMON_GITIGNORE_ENTRIES);
+  const missingEntries = DAEMON_GITIGNORE_ENTRIES.filter((entry) => !hasGitignoreEntry(normalized.content, entry));
+  if (missingEntries.length === 0 && !normalized.removed) return false;
+  const nextContent = existsSync(gitignorePath)
+    ? `${normalized.content}${normalized.content.endsWith("\n") || normalized.content.length === 0 ? "" : "\n"}${missingEntries.join("\n")}${missingEntries.length > 0 ? "\n" : ""}`
+    : `${DAEMON_GITIGNORE_ENTRIES.join("\n")}\n`;
+  writeTrackedText(gitignorePath, nextContent);
+  return true;
+}
+
 function defaultState(): OmxDaemonState {
   return {
     isRunning: false,
@@ -409,13 +448,12 @@ export async function scaffoldOmxDaemonFiles(projectRoot = process.cwd()): Promi
 
   for (const [filePath, content] of templates) {
     if (!existsSync(filePath)) {
-      if (filePath.endsWith(".json")) {
-        writeTrackedText(filePath, content);
-      } else {
-        writeTrackedText(filePath, content);
-      }
+      writeTrackedText(filePath, content);
       changed.push(relative(projectRoot, filePath));
     }
+  }
+  if (ensureDaemonGitignore(projectRoot)) {
+    changed.push(".gitignore");
   }
   return changed;
 }
@@ -538,8 +576,10 @@ function evaluateIssue(issue: GitHubIssue, gate: ParsedIssueGate, context: { pro
 
 function queueSummary(queue: OmxDaemonQueueItem[]): string {
   const queued = queue.filter((item) => item.status === "queued").length;
+  const approved = queue.filter((item) => item.status === "approved").length;
+  const rejected = queue.filter((item) => item.status === "rejected").length;
   const published = queue.filter((item) => item.status === "published").length;
-  return `queued=${queued}, published=${published}, total=${queue.length}`;
+  return `queued=${queued}, approved=${approved}, rejected=${rejected}, published=${published}, total=${queue.length}`;
 }
 
 function formatDaemonTarget(repository: string | null): string {
@@ -548,6 +588,10 @@ function formatDaemonTarget(repository: string | null): string {
 
 function formatCredentialGuidance(): string {
   return "Check .omx/daemon/daemon.config.json, GH_TOKEN, GITHUB_TOKEN, or gh auth token.";
+}
+
+function formatRepositoryGuidance(): string {
+  return "Add `repository` to .omx/daemon/daemon.config.json or set git remote origin to a GitHub repository.";
 }
 
 function formatPermissionGuidance(permissionClass: "issue-read" | "issue-write"): string {
@@ -563,6 +607,13 @@ function appendTransition(
   at = new Date().toISOString(),
 ): void {
   item.transitions.push({ state, at, ...(note ? { note } : {}) });
+}
+
+function formatLastActivity(state: OmxDaemonState): string {
+  const lastTriage = state.lastTriageAt ?? "never";
+  const lastPoll = state.lastPollAt ?? "never";
+  const lastScan = state.lastIssueScanAt ?? "never";
+  return `last triage=${lastTriage}; last poll=${lastPoll}; last issue scan=${lastScan}`;
 }
 
 function createQueueItem(
@@ -888,29 +939,73 @@ export async function approveOmxDaemonItem(projectRoot: string, itemId: string):
   if (!item) {
     return { success: false, message: `Queue item ${itemId} was not found.`, state, error: "queue_item_not_found" };
   }
-  if (item.status !== "queued") {
+  if (item.status === "published") {
+    return { success: true, message: `Queue item ${itemId} is already published.`, state, queue };
+  }
+  if (item.status === "rejected") {
     return { success: false, message: `Queue item ${itemId} is already ${item.status}.`, state, error: "queue_item_not_queued" };
   }
 
   const config = readOmxDaemonConfig(projectRoot);
   const repository = resolveRepository(projectRoot, config);
   const tokenResult = resolveGitHubToken(config);
-  const approvedAt = new Date().toISOString();
+  const requiresGitHubMutation = Boolean(config?.applyGitHubLabelsOnApprove);
+  if (requiresGitHubMutation && !repository) {
+    const nextState = {
+      ...state,
+      credentialSource: tokenResult.source,
+      statusReason: "missing-repository",
+      lastError: formatRepositoryGuidance(),
+    };
+    writeDaemonState(projectRoot, nextState);
+    return {
+      success: false,
+      message: "Approval cannot apply the configured GitHub mutation because the repository is not configured.",
+      state: nextState,
+      queue,
+      error: formatRepositoryGuidance(),
+    };
+  }
+  if (requiresGitHubMutation && !tokenResult.token) {
+    const nextState = {
+      ...state,
+      repository,
+      credentialSource: tokenResult.source,
+      statusReason: "missing-credentials",
+      lastError: tokenResult.error,
+    };
+    writeDaemonState(projectRoot, nextState);
+    return {
+      success: false,
+      message: "Approval cannot apply the configured GitHub mutation without GitHub credentials.",
+      state: nextState,
+      queue,
+      error: tokenResult.error,
+    };
+  }
+  const approvedAt = item.approvedAt ?? new Date().toISOString();
+  if (item.status === "queued") {
+    item.status = "approved";
+    item.approvedAt = approvedAt;
+    appendTransition(item, "approved", "Approval accepted; publishing immediately.", approvedAt);
+    writeQueue(projectRoot, queue);
+  }
 
   let githubLabelMutationApplied = false;
   try {
-    appendTransition(item, "approved", "Approval accepted; publishing immediately.", approvedAt);
-    if (config?.applyGitHubLabelsOnApprove && repository && tokenResult.token) {
-      await applyApprovedGitHubLabels(repository, item, tokenResult.token);
+    if (!existsSync(item.publicationPath)) {
+      await mkdir(resolveKnowledgeSinkDir(projectRoot, config), { recursive: true });
+      const draft = await readFile(item.draftPath, "utf-8");
+      await writeFile(item.publicationPath, `${draft}\n\n---\nApproved at: ${approvedAt}\n`, "utf-8");
+    }
+    if (requiresGitHubMutation && !item.githubLabelMutationApplied) {
+      await applyApprovedGitHubLabels(repository as string, item, tokenResult.token as string);
       githubLabelMutationApplied = true;
       logToFile(paths.logPath, `Applied approved GitHub labels to issue #${item.issueNumber}: ${item.recommendedLabels.join(", ")}`);
+    } else {
+      githubLabelMutationApplied = Boolean(item.githubLabelMutationApplied);
     }
-
-    await mkdir(resolveKnowledgeSinkDir(projectRoot, config), { recursive: true });
-    const draft = await readFile(item.draftPath, "utf-8");
-    await writeFile(item.publicationPath, `${draft}\n\n---\nApproved at: ${approvedAt}\n`, "utf-8");
   } catch (error) {
-    item.transitions = item.transitions.filter((entry) => !(entry.state === "approved" && entry.at === approvedAt));
     const message = error instanceof Error ? error.message : String(error);
     const statusReason = error instanceof GitHubPermissionError
       ? "insufficient-permissions"
@@ -929,7 +1024,7 @@ export async function approveOmxDaemonItem(projectRoot: string, itemId: string):
       success: false,
       message: statusReason === "insufficient-permissions"
         ? "Approval could not apply GitHub mutations because permissions are insufficient."
-        : `Approval failed for ${itemId}.`,
+        : `Approval failed for ${itemId}; the item remains approved for retry.`,
       state: nextState,
       queue,
       error: message,
@@ -939,7 +1034,7 @@ export async function approveOmxDaemonItem(projectRoot: string, itemId: string):
   item.status = "published";
   item.approvedAt = approvedAt;
   item.publishedAt = approvedAt;
-  item.githubLabelMutationApplied = githubLabelMutationApplied;
+  item.githubLabelMutationApplied = requiresGitHubMutation ? githubLabelMutationApplied : false;
   appendTransition(item, "published", "Approved publication written to the knowledge sink.", approvedAt);
 
   const nextState: OmxDaemonState = {
@@ -967,6 +1062,9 @@ export function rejectOmxDaemonItem(projectRoot: string, itemId: string): Daemon
   const state = readDaemonState(projectRoot);
   if (!item) {
     return { success: false, message: `Queue item ${itemId} was not found.`, state, error: "queue_item_not_found" };
+  }
+  if (item.status === "rejected") {
+    return { success: true, message: `Queue item ${itemId} is already rejected.`, state, queue };
   }
   if (item.status !== "queued") {
     return { success: false, message: `Queue item ${itemId} is already ${item.status}.`, state, error: "queue_item_not_queued" };
@@ -1014,6 +1112,8 @@ export function getOmxDaemonStatus(projectRoot = process.cwd()): DaemonResponse 
   const running = isOmxDaemonRunning(projectRoot);
   const statusReason = !tokenResult.token
     ? "missing-credentials"
+    : !repository
+      ? "missing-repository"
     : state.statusReason === "insufficient-permissions"
       ? "insufficient-permissions"
     : running ? "running" : "stopped";
@@ -1022,11 +1122,13 @@ export function getOmxDaemonStatus(projectRoot = process.cwd()): DaemonResponse 
     success: true,
     message: !tokenResult.token
       ? `Daemon is configured for ${target}, but GitHub credentials are missing. ${formatCredentialGuidance()}`
+      : !repository
+        ? `Daemon is configured for ${target}, but the GitHub repository is not resolvable. ${formatRepositoryGuidance()}`
       : statusReason === "insufficient-permissions"
         ? `Daemon is configured for ${target}, but GitHub permissions are insufficient. ${state.lastError ?? formatPermissionGuidance("issue-read")}`
       : running
-        ? `Daemon is running for ${target}; ${queueSummary(queue)}.`
-        : `Daemon is stopped for ${target}; ${queueSummary(queue)}. Use \`omx daemon start\` for background polling or \`omx daemon run-once\` for a foreground pass.`,
+        ? `Daemon is running for ${target}; ${queueSummary(queue)}; ${formatLastActivity(state)}.`
+        : `Daemon is stopped for ${target}; ${queueSummary(queue)}; ${formatLastActivity(state)}. Use \`omx daemon start\` for background polling or \`omx daemon run-once\` for a foreground pass.`,
     state: {
       ...state,
       isRunning: running,
@@ -1096,6 +1198,17 @@ export function startOmxDaemon(projectRoot = process.cwd()): DaemonResponse {
     writeDaemonState(projectRoot, state);
     return { success: false, message: "Cannot start daemon without GitHub credentials.", state, error: tokenResult.error };
   }
+  const repository = resolveRepository(projectRoot, config);
+  if (!repository) {
+    const state = {
+      ...readDaemonState(projectRoot),
+      credentialSource: tokenResult.source,
+      statusReason: "missing-repository",
+      lastError: formatRepositoryGuidance(),
+    };
+    writeDaemonState(projectRoot, state);
+    return { success: false, message: "Cannot start daemon without a resolvable GitHub repository.", state, error: formatRepositoryGuidance() };
+  }
 
   const modulePath = import.meta.url;
   const child = spawn(process.execPath, ["-e", `import('${modulePath}').then((m) => m.runOmxDaemonLoop(${JSON.stringify(projectRoot)})).catch((err) => { console.error('${DAEMON_IDENTITY_MARKER}', err); process.exit(1); });`], {
@@ -1117,6 +1230,7 @@ export function startOmxDaemon(projectRoot = process.cwd()): DaemonResponse {
     pid,
     startedAt: new Date().toISOString(),
     credentialSource: tokenResult.source,
+    repository,
     statusReason: "running",
   };
   writeDaemonState(projectRoot, state);

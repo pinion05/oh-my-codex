@@ -100,12 +100,20 @@ describe("omx daemon CLI", () => {
         stdout: () => undefined,
         stderr: () => undefined,
       });
+      await writeFile(
+        join(cwd, ".omx", "daemon", "daemon.config.json"),
+        JSON.stringify({
+          repository: "octo/example",
+          githubCredentialSource: "env",
+          githubTokenEnvVar: "GH_TOKEN",
+        }, null, 2),
+      );
       await daemonCommand(["status"], {
         stdout: (line) => lines.push(line),
         stderr: (line) => lines.push(line),
       });
       assert.match(lines.join("\n"), /Daemon is stopped/i);
-      assert.match(lines.join("\n"), /queued=0, published=0, total=0/);
+      assert.match(lines.join("\n"), /queued=0, approved=0, rejected=0, published=0, total=0/);
     } finally {
       if (typeof previousGhToken === "string") process.env.GH_TOKEN = previousGhToken;
       else delete process.env.GH_TOKEN;

@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import {
   approveOmxDaemonItem,
   getOmxDaemonStatus,
+  rejectOmxDaemonItem,
   resolveGitHubToken,
   runOmxDaemonOnce,
   scaffoldOmxDaemonFiles,
@@ -32,7 +33,27 @@ describe("omx daemon runtime", () => {
       const changed = await scaffoldOmxDaemonFiles(cwd);
       assert.ok(changed.includes(".omx/daemon/ISSUE_GATE.md"));
       assert.ok(changed.includes(".omx/daemon/daemon.config.json"));
+      assert.ok(changed.includes(".gitignore"));
       assert.equal(existsSync(join(cwd, ".omx", "daemon", "RULES.md")), true);
+      const gitignore = await readFile(join(cwd, ".gitignore"), "utf-8");
+      assert.match(gitignore, /^\.omx\/\*$/m);
+      assert.match(gitignore, /^!\.omx\/daemon\/$/m);
+      assert.match(gitignore, /^!\.omx\/daemon\/daemon\.config\.json$/m);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("repairs legacy .gitignore entries during daemon scaffold", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-daemon-scaffold-"));
+    try {
+      await writeFile(join(cwd, ".gitignore"), ".omx/\nnode_modules/\n");
+      const changed = await scaffoldOmxDaemonFiles(cwd);
+      assert.ok(changed.includes(".gitignore"));
+      const gitignore = await readFile(join(cwd, ".gitignore"), "utf-8");
+      assert.doesNotMatch(gitignore, /^\.omx\/$/m);
+      assert.match(gitignore, /^node_modules\/$/m);
+      assert.match(gitignore, /^!\.omx\/daemon\/$/m);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
@@ -162,6 +183,7 @@ describe("omx daemon runtime", () => {
       await writeFile(
         join(cwd, ".omx", "daemon", "daemon.config.json"),
         JSON.stringify({
+          repository: "octo/example",
           githubCredentialSource: "config-token-ref",
           githubTokenEnvVar: "OMX_DAEMON_TEST_TOKEN",
         }, null, 2),
@@ -193,10 +215,182 @@ describe("omx daemon runtime", () => {
     }
   });
 
+  it("reports missing-repository before start and status when repository cannot be resolved", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-daemon-status-"));
+    try {
+      await scaffoldOmxDaemonFiles(cwd);
+      process.env.GH_TOKEN = "token-from-env";
+      const start = startOmxDaemon(cwd);
+      assert.equal(start.success, false);
+      assert.equal(start.state?.statusReason, "missing-repository");
+      assert.match(start.message, /cannot start daemon without a resolvable github repository/i);
+
+      const status = getOmxDaemonStatus(cwd);
+      assert.equal(status.success, true);
+      assert.equal(status.state?.statusReason, "missing-repository");
+      assert.match(status.message, /repository is not resolvable/i);
+      assert.match(status.message, /set git remote origin/i);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("includes last triage activity and rejected counts in status output", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-daemon-status-"));
+    try {
+      await scaffoldOmxDaemonFiles(cwd);
+      await writeFile(
+        join(cwd, ".omx", "daemon", "daemon.config.json"),
+        JSON.stringify({
+          repository: "octo/example",
+          githubCredentialSource: "env",
+          githubTokenEnvVar: "GH_TOKEN",
+          maxIssuesPerRun: 5,
+        }, null, 2),
+      );
+      process.env.GH_TOKEN = "token-from-env";
+      globalThis.fetch = (async (input: string | URL) => {
+        const url = String(input);
+        if (url.includes("/issues?")) {
+          return new Response(JSON.stringify([
+            {
+              number: 7,
+              title: "Bug in setup flow",
+              html_url: "https://github.com/octo/example/issues/7",
+              body: "needs review",
+              updated_at: "2026-04-09T12:00:00Z",
+              labels: [],
+              comments: 0,
+            },
+          ]), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        throw new Error(`unexpected fetch ${url}`);
+      }) as typeof fetch;
+
+      const runOnce = await runOmxDaemonOnce(cwd);
+      assert.equal(runOnce.success, true);
+      const item = runOnce.queue?.[0];
+      assert.ok(item);
+      const rejected = rejectOmxDaemonItem(cwd, item!.id);
+      assert.equal(rejected.success, true);
+
+      const status = getOmxDaemonStatus(cwd);
+      assert.match(status.message, /rejected=1/);
+      assert.match(status.message, /last triage=/i);
+      assert.match(status.message, /last poll=/i);
+      assert.match(status.message, /last issue scan=/i);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps approvals resumable when local publish or configured GitHub mutation cannot finish", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-daemon-approve-"));
+    try {
+      await scaffoldOmxDaemonFiles(cwd);
+      await writeFile(
+        join(cwd, ".omx", "daemon", "daemon.config.json"),
+        JSON.stringify({
+          repository: "octo/example",
+          githubCredentialSource: "env",
+          githubTokenEnvVar: "GH_TOKEN",
+          maxIssuesPerRun: 5,
+          applyGitHubLabelsOnApprove: true,
+        }, null, 2),
+      );
+      process.env.GH_TOKEN = "token-from-env";
+      globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/issues?")) {
+          return new Response(JSON.stringify([
+            {
+              number: 8,
+              title: "Approval retry case",
+              html_url: "https://github.com/octo/example/issues/8",
+              body: "needs review",
+              updated_at: "2026-04-09T12:00:00Z",
+              labels: [],
+              comments: 0,
+            },
+          ]), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        if (url.includes("/issues/8") && init?.method === "PATCH") {
+          return new Response("forbidden", { status: 403 });
+        }
+        throw new Error(`unexpected fetch ${url}`);
+      }) as typeof fetch;
+
+      const runOnce = await runOmxDaemonOnce(cwd);
+      const item = runOnce.queue?.[0];
+      assert.ok(item);
+      const approval = await approveOmxDaemonItem(cwd, item!.id);
+      assert.equal(approval.success, false);
+      const retained = approval.queue?.find((entry) => entry.id === item!.id);
+      assert.equal(retained?.status, "approved");
+      assert.equal(retained?.githubLabelMutationApplied, undefined);
+      assert.match(approval.message, /permissions are insufficient/i);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("treats duplicate reject attempts as idempotent success", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-daemon-reject-"));
+    try {
+      await scaffoldOmxDaemonFiles(cwd);
+      await writeFile(
+        join(cwd, ".omx", "daemon", "daemon.config.json"),
+        JSON.stringify({
+          repository: "octo/example",
+          githubCredentialSource: "env",
+          githubTokenEnvVar: "GH_TOKEN",
+          maxIssuesPerRun: 5,
+        }, null, 2),
+      );
+      process.env.GH_TOKEN = "token-from-env";
+      globalThis.fetch = (async (input: string | URL) => {
+        const url = String(input);
+        if (url.includes("/issues?")) {
+          return new Response(JSON.stringify([
+            {
+              number: 9,
+              title: "Duplicate reject",
+              html_url: "https://github.com/octo/example/issues/9",
+              body: "needs review",
+              updated_at: "2026-04-09T12:00:00Z",
+              labels: [],
+              comments: 0,
+            },
+          ]), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        throw new Error(`unexpected fetch ${url}`);
+      }) as typeof fetch;
+
+      const runOnce = await runOmxDaemonOnce(cwd);
+      const item = runOnce.queue?.[0];
+      assert.ok(item);
+      const first = rejectOmxDaemonItem(cwd, item!.id);
+      const second = rejectOmxDaemonItem(cwd, item!.id);
+      assert.equal(first.success, true);
+      assert.equal(second.success, true);
+      assert.match(second.message, /already rejected/i);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("reports running status when the daemon loop is active", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-daemon-status-"));
     try {
       await scaffoldOmxDaemonFiles(cwd);
+      await writeFile(
+        join(cwd, ".omx", "daemon", "daemon.config.json"),
+        JSON.stringify({
+          repository: "octo/example",
+          githubCredentialSource: "env",
+          githubTokenEnvVar: "GH_TOKEN",
+        }, null, 2),
+      );
       process.env.GH_TOKEN = "token-from-env";
 
       const start = startOmxDaemon(cwd);
