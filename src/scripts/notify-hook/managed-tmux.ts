@@ -153,7 +153,11 @@ export async function resolveManagedSessionContext(cwd: string, payload: any, { 
       return { managed: false, reason: 'stale_session', invocationSessionId, sessionState, expectedTmuxSessionName: '', currentTmuxSessionName: '' };
     }
 
-    const expectedTmuxSessionName = buildExpectedManagedTmuxSessionName(cwd, canonicalSessionId || invocationSessionId);
+    const authoritativeSessionCwd = safeString(sessionState.cwd || cwd).trim() || cwd;
+    const expectedTmuxSessionName = buildExpectedManagedTmuxSessionName(
+      authoritativeSessionCwd,
+      canonicalSessionId || invocationSessionId,
+    );
     const currentTmuxSessionName = readCurrentTmuxSessionName();
     if (currentTmuxSessionName && currentTmuxSessionName === expectedTmuxSessionName) {
       return {
