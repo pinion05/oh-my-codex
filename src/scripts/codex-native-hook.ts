@@ -1038,10 +1038,11 @@ async function maybeReturnRepeatableStopOutput(
   signature: string,
   output: Record<string, unknown> | null,
   canonicalSessionId?: string,
+  options: { allowRepeatDuringStopHook?: boolean } = {},
 ): Promise<Record<string, unknown> | null> {
   if (!output) return null;
   const stopHookActive = payload.stop_hook_active === true || payload.stopHookActive === true;
-  if (stopHookActive) {
+  if (stopHookActive && options.allowRepeatDuringStopHook !== true) {
     const state = await readJsonIfExists(join(stateDir, NATIVE_STOP_STATE_FILE)) ?? {};
     const previousSignature = readPreviousNativeStopSignature(
       state,
@@ -1387,21 +1388,40 @@ async function buildStopHookOutput(
     return null;
   }
 
-  if (stopHookActive) {
-    return null;
-  }
-
   const currentPhase = safeString(ralphState?.current_phase).trim() || "executing";
   const stopReason = `ralph_${currentPhase}`;
   const systemMessage =
     `OMX Ralph is still active (phase: ${currentPhase}); continue the task and gather fresh verification evidence before stopping.`;
 
-  return {
-    decision: "block",
-    reason: systemMessage,
-    stopReason,
-    systemMessage,
-  };
+  if (stopHookActive) {
+    return await maybeReturnRepeatableStopOutput(
+      payload,
+      stateDir,
+      buildRepeatableStopSignature(payload, "ralph-stop", currentPhase, canonicalSessionId),
+      {
+        decision: "block",
+        reason: systemMessage,
+        stopReason,
+        systemMessage,
+      },
+      canonicalSessionId,
+      { allowRepeatDuringStopHook: true },
+    );
+  }
+
+  return await maybeReturnRepeatableStopOutput(
+    payload,
+    stateDir,
+    buildRepeatableStopSignature(payload, "ralph-stop", currentPhase, canonicalSessionId),
+    {
+      decision: "block",
+      reason: systemMessage,
+      stopReason,
+      systemMessage,
+    },
+    canonicalSessionId,
+    { allowRepeatDuringStopHook: true },
+  );
 }
 
 export async function dispatchCodexNativeHook(

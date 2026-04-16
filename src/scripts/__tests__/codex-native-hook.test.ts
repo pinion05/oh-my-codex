@@ -2942,8 +2942,9 @@ esac
     }
   });
 
-  it("does not re-block Ralph when Stop already continued once", async () => {
-    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-ralph-once-"));
+  it("keeps blocking Ralph Stop replays until the active task advances", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-ralph-replay-"));
+    const previousOmxSessionId = process.env.OMX_SESSION_ID;
     try {
       const stateDir = join(cwd, ".omx", "state");
       await mkdir(stateDir, { recursive: true });
@@ -2955,22 +2956,41 @@ esac
         }),
       );
 
-      const result = await dispatchCodexNativeHook(
+      process.env.OMX_SESSION_ID = "sess-stop-ralph-replay";
+      const payload = {
+        hook_event_name: "Stop",
+        cwd,
+        last_assistant_message: "Next active targets:\n\n1. scheduler integration\n\nI am continuing.",
+      };
+      const expected = {
+        decision: "block",
+        reason:
+          "OMX Ralph is still active (phase: executing); continue the task and gather fresh verification evidence before stopping.",
+        stopReason: "ralph_executing",
+        systemMessage:
+          "OMX Ralph is still active (phase: executing); continue the task and gather fresh verification evidence before stopping.",
+      };
+
+      const first = await dispatchCodexNativeHook(payload, { cwd });
+      const replay = await dispatchCodexNativeHook(
         {
-          hook_event_name: "Stop",
-          cwd,
-          session_id: "sess-stop-ralph-once",
+          ...payload,
           stop_hook_active: true,
         },
         { cwd },
       );
 
-      assert.equal(result.omxEventName, "stop");
-      assert.equal(result.outputJson, null);
+      assert.equal(first.omxEventName, "stop");
+      assert.deepEqual(first.outputJson, expected);
+      assert.equal(replay.omxEventName, "stop");
+      assert.deepEqual(replay.outputJson, expected);
     } finally {
+      if (typeof previousOmxSessionId === "string") process.env.OMX_SESSION_ID = previousOmxSessionId;
+      else delete process.env.OMX_SESSION_ID;
       await rm(cwd, { recursive: true, force: true });
     }
   });
+
 
   it("returns Stop continuation output for native auto-nudge stall prompts", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-auto-nudge-"));

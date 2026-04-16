@@ -2265,8 +2265,8 @@ exit 0
     }
   });
 
-  it('waits a full cadence from startup when persisted Ralph steer state is empty', async () => {
-    const wd = await mkdtemp(join(tmpdir(), 'omx-fallback-ralph-startup-cooldown-'));
+  it('sends the first Ralph continue steer immediately when persisted steer state is empty', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-fallback-ralph-first-steer-'));
     const fakeBinDir = join(wd, 'fake-bin');
     const stateDir = join(wd, '.omx', 'state');
     const tmuxLogPath = join(wd, 'tmux.log');
@@ -2304,24 +2304,21 @@ exit 0
       );
       assert.equal(first.status, 0, first.stderr || first.stdout);
 
-      const second = spawnSync(
-        process.execPath,
-        [watcherScript, '--once', '--cwd', wd, '--notify-script', notifyHook, '--poll-ms', '50'],
-        { encoding: 'utf-8', env },
-      );
-      assert.equal(second.status, 0, second.stderr || second.stdout);
-
       const tmuxLog = await readFile(tmuxLogPath, 'utf8').catch(() => '');
       const sends = tmuxLog.match(/send-keys -t %42 -l Ralph loop active continue \[OMX_TMUX_INJECT\]/g) || [];
-      assert.equal(sends.length, 0, 'empty startup state should wait one cadence period before the first Ralph steer');
+      assert.equal(sends.length, 1, 'empty startup state should send the first Ralph steer immediately once progress is stale');
 
       const watcherState = JSON.parse(await readFile(statePath, 'utf-8'));
-      assert.equal(watcherState.ralph_continue_steer?.last_reason, 'startup_cooldown');
-      assert.equal(watcherState.ralph_continue_steer?.last_sent_at, '');
+      assert.equal(watcherState.ralph_continue_steer?.last_reason, 'sent');
       assert.match(
-        watcherState.ralph_continue_steer?.cooldown_anchor_at ?? '',
+        watcherState.ralph_continue_steer?.last_sent_at ?? '',
         /^\d{4}-\d{2}-\d{2}T/,
-        'startup cooldown should persist an anchor so restarts stay throttled',
+        'first steer should persist a real send timestamp for active-state signaling',
+      );
+      assert.equal(
+        watcherState.ralph_continue_steer?.cooldown_anchor_at,
+        watcherState.ralph_continue_steer?.last_sent_at,
+        'first steer should anchor subsequent cooldowns to the real send time',
       );
     } finally {
       await rm(wd, { recursive: true, force: true });
