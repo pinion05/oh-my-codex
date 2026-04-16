@@ -1596,6 +1596,7 @@ function withTmuxExtendedKeysLeaseLock<T>(
     try {
       mkdirSync(lockPath);
       try {
+        writeFileSync(join(lockPath, "pid"), String(process.pid));
         return run();
       } finally {
         rmSync(lockPath, { recursive: true, force: true });
@@ -1608,8 +1609,20 @@ function withTmuxExtendedKeysLeaseLock<T>(
       if (code !== "EEXIST") throw err;
       const lockStat = statSync(lockPath, { throwIfNoEntry: false });
       if (lockStat && Date.now() - lockStat.mtimeMs > TMUX_EXTENDED_KEYS_LOCK_STALE_MS) {
-        rmSync(lockPath, { recursive: true, force: true });
-        continue;
+        let holderAlive = false;
+        try {
+          const holderPid = Number.parseInt(readFileSync(join(lockPath, "pid"), "utf-8").trim(), 10);
+          if (Number.isFinite(holderPid) && holderPid > 0) {
+            process.kill(holderPid, 0);
+            holderAlive = true;
+          }
+        } catch {
+          // PID file missing/unreadable or process dead (ESRCH) — treat as stale
+        }
+        if (!holderAlive) {
+          rmSync(lockPath, { recursive: true, force: true });
+          continue;
+        }
       }
       blockMs(TMUX_EXTENDED_KEYS_LOCK_RETRY_MS);
     }
