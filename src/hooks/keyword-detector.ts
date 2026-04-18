@@ -222,6 +222,7 @@ export async function persistDeepInterviewModeState(
     'deep-interview',
     nextSkill?.session_id ?? previousSkill?.session_id ?? input.sessionId,
   ).absolutePath;
+  await mkdir(dirname(statePath), { recursive: true });
   const previousModeState = await readExistingDeepInterviewState(statePath);
 
   if (nextSkill?.skill === 'deep-interview' && nextSkill.active) {

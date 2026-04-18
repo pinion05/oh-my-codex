@@ -38,6 +38,7 @@ export const DEEP_INTERVIEW_INPUT_LOCK_MESSAGE = 'Deep interview is active; auto
 export const DEFAULT_AUTO_NUDGE_RESPONSE = 'continue with the current task only if it is already authorized';
 const DEEP_INTERVIEW_ERROR_PATTERNS = [' error', ' failed', ' failure', ' exception', 'unable to continue', 'cannot continue', 'could not continue'];
 const DEEP_INTERVIEW_ABORT_PATTERNS = ['aborted', 'cancelled', 'canceled'];
+const DEEP_INTERVIEW_SUCCESS_PATTERNS = ['interview completed', 'interview complete', 'interview finished', 'final summary ready'];
 const DEEP_INTERVIEW_ABORT_INPUTS = new Set(['abort', 'cancel', 'stop']);
 const DEEP_INTERVIEW_BLOCKED_APPROVAL_PREFIXES = new Set(['next i should']);
 const SKILL_PHASES = new Set(['planning', 'executing', 'reviewing', 'completing']);
@@ -99,6 +100,10 @@ function isDeepInterviewAbortInput(text) {
 function hasAnySubstring(text, patterns) {
   const lower = safeString(text).toLowerCase();
   return patterns.some((pattern) => lower.includes(pattern));
+}
+
+function looksLikeDeepInterviewSuccess(text) {
+  return hasAnySubstring(text, DEEP_INTERVIEW_SUCCESS_PATTERNS);
 }
 
 export function isDeepInterviewAutoApprovalLocked(skillState) {
@@ -219,8 +224,15 @@ export async function syncSkillStateFromTurn(stateDir, payload) {
   const previousSkillState = cloneSkillActiveState(skillState);
   const previousPhase = normalizeSkillPhase(skillState.phase);
   const inferredPhase = inferSkillPhaseFromText(lastMessage, previousPhase);
-  skillState.phase = inferredPhase;
-  skillState.active = inferredPhase !== 'completing';
+  const explicitDeepInterviewSuccess = skillState.skill === 'deep-interview' && looksLikeDeepInterviewSuccess(lastMessage);
+  const nextPhase = skillState.skill === 'deep-interview'
+    && inferredPhase === 'completing'
+    && previousPhase !== 'completing'
+    && !explicitDeepInterviewSuccess
+    ? previousPhase
+    : inferredPhase;
+  skillState.phase = nextPhase;
+  skillState.active = nextPhase !== 'completing';
 
   if (skillState.skill === 'autoresearch') {
     const completion = await readAutoresearchCompletionStatus(payload.cwd || process.cwd(), invocationSessionId);

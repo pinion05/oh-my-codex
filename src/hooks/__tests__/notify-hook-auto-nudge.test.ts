@@ -1948,6 +1948,79 @@ exit 0
     });
   });
 
+  it('does not release deep-interview state from generic progress prose', async () => {
+    await withTempWorkingDir(async (cwd) => {
+      const omxDir = join(cwd, '.omx');
+      const stateDir = join(omxDir, 'state');
+      const logsDir = join(omxDir, 'logs');
+      const codexHome = join(cwd, 'codex-home');
+      const fakeBinDir = join(cwd, 'fake-bin');
+
+      await mkdir(logsDir, { recursive: true });
+      await mkdir(stateDir, { recursive: true });
+      await mkdir(codexHome, { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+
+      await writeJson(join(codexHome, '.omx-config.json'), {
+        autoNudge: { enabled: true, delaySec: 0, stallMs: 0 },
+      });
+      await writeManagedSessionState(stateDir, cwd);
+      const sessionStateDir = join(stateDir, 'sessions', 'sess-managed');
+      await mkdir(sessionStateDir, { recursive: true });
+      await writeJson(join(sessionStateDir, 'skill-active-state.json'), {
+        version: 1,
+        active: true,
+        skill: 'deep-interview',
+        keyword: 'deep interview',
+        phase: 'executing',
+        activated_at: '2026-02-25T00:00:00.000Z',
+        updated_at: '2026-02-25T00:00:00.000Z',
+        source: 'keyword-detector',
+        input_lock: {
+          active: true,
+          scope: 'deep-interview-auto-approval',
+          acquired_at: '2026-02-25T00:00:00.000Z',
+          blocked_inputs: DEEP_INTERVIEW_BLOCKED_APPROVAL_INPUTS,
+          message: 'Deep interview is active; auto-approval shortcuts are blocked until the interview finishes.',
+        },
+      });
+      await writeJson(join(sessionStateDir, 'deep-interview-state.json'), {
+        active: true,
+        mode: 'deep-interview',
+        current_phase: 'intent-first',
+        started_at: '2026-02-25T00:00:00.000Z',
+        updated_at: '2026-02-25T00:00:00.000Z',
+      });
+      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(join(cwd, 'tmux.log')));
+      await chmod(join(fakeBinDir, 'tmux'), 0o755);
+
+      const result = runNotifyHook(cwd, fakeBinDir, codexHome, {
+        'last-assistant-message': 'Summary so far: done with the first round of questions.',
+      });
+      assert.equal(result.status, 0, `hook failed: ${result.stderr || result.stdout}`);
+
+      const skillState = JSON.parse(await readFile(join(sessionStateDir, 'skill-active-state.json'), 'utf-8')) as {
+        active: boolean;
+        phase: string;
+        input_lock?: { active: boolean; released_at?: string; exit_reason?: string };
+      };
+      assert.equal(skillState.active, true);
+      assert.notEqual(skillState.phase, 'completing');
+      assert.equal(skillState.input_lock?.active, true);
+      assert.equal(skillState.input_lock?.released_at || '', '');
+      assert.equal(skillState.input_lock?.exit_reason || '', '');
+
+      const modeState = JSON.parse(await readFile(join(sessionStateDir, 'deep-interview-state.json'), 'utf-8')) as {
+        active: boolean;
+        current_phase: string;
+        completed_at?: string;
+      };
+      assert.equal(modeState.active, true);
+      assert.equal(modeState.current_phase, 'intent-first');
+      assert.equal(modeState.completed_at || '', '');
+    });
+  });
+
   it('releases the deep-interview input lock on error', async () => {
     await withTempWorkingDir(async (cwd) => {
       const omxDir = join(cwd, '.omx');
