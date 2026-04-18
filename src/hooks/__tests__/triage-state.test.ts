@@ -200,6 +200,25 @@ describe('path selection — session-scoped vs root', () => {
       removeTmp(sub);
     }
   });
+
+  it('write with malformed explicit sessionId skips persistence instead of falling back to root', () => {
+    const isolated = makeTmp();
+    try {
+      const sessionId = 'bad/session';
+      writeTriageState({ cwd: isolated, sessionId, state: validState() });
+      assert.equal(existsSync(expectedPath(isolated)), false);
+      assert.equal(existsSync(join(isolated, '.omx', 'state', 'sessions', 'bad', 'session')), false);
+    } finally {
+      removeTmp(isolated);
+    }
+  });
+
+  it('read with malformed explicit sessionId ignores root-scoped state', () => {
+    const rootState = validState();
+    writeTriageState({ cwd: tmp, sessionId: undefined, state: rootState });
+    const result = readTriageState({ cwd: tmp, sessionId: 'bad/session' });
+    assert.equal(result, null);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -324,7 +343,7 @@ describe('shouldSuppressFollowup — keyword bypasses suppression', () => {
   });
 });
 
-describe('shouldSuppressFollowup — short prompts (word count <= 6)', () => {
+describe('shouldSuppressFollowup — clarifying short prompts only', () => {
   const previous = validState({ suppress_followup: true });
 
   it('"yes" (1 word) → true', () => {
@@ -341,10 +360,10 @@ describe('shouldSuppressFollowup — short prompts (word count <= 6)', () => {
     );
   });
 
-  it('"settings page" (2 words) → true', () => {
+  it('"settings page" (2 words) → false', () => {
     assert.equal(
       shouldSuppressFollowup({ previous, currentPrompt: 'settings page', currentHasKeyword: false }),
-      true,
+      false,
     );
   });
 
@@ -355,14 +374,25 @@ describe('shouldSuppressFollowup — short prompts (word count <= 6)', () => {
     );
   });
 
-  it('"one two three four five six" (6 words, boundary) → true', () => {
+  it('"one two three four five six" (6 words, boundary) → false', () => {
     assert.equal(
       shouldSuppressFollowup({
         previous,
         currentPrompt: 'one two three four five six',
         currentHasKeyword: false,
       }),
-      true,
+      false,
+    );
+  });
+
+  it('"fix typo in src/foo.ts" stays unsuppressed even though short', () => {
+    assert.equal(
+      shouldSuppressFollowup({
+        previous,
+        currentPrompt: 'fix typo in src/foo.ts',
+        currentHasKeyword: false,
+      }),
+      false,
     );
   });
 });

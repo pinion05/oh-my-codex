@@ -4582,4 +4582,109 @@ describe("codex native hook triage integration", () => {
       await rm(cwd, { recursive: true, force: true });
     }
   });
+
+  it("keeps triage default-enabled when config omits promptRouting.triage.enabled", async () => {
+    const tmpHome = await mkdtemp(join(tmpdir(), "omx-triage-config-omitted-home-"));
+    const cwd = await mkdtemp(join(tmpdir(), "omx-triage-config-omitted-cwd-"));
+    const previousCodexHome = process.env.CODEX_HOME;
+    try {
+      await writeJson(join(tmpHome, ".omx-config.json"), {
+        promptRouting: {},
+      });
+      process.env.CODEX_HOME = tmpHome;
+      resetTriageConfigCache();
+
+      await mkdir(join(cwd, ".omx", "state"), { recursive: true });
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "UserPromptSubmit",
+          cwd,
+          session_id: "triage-defaulted-1",
+          thread_id: "thread-triage-defaulted-1",
+          turn_id: "turn-triage-defaulted-1",
+          prompt: "add dark mode toggle to the settings page",
+        },
+        { cwd },
+      );
+
+      const additionalContext = String(
+        (result.outputJson as { hookSpecificOutput?: { additionalContext?: string } })?.hookSpecificOutput?.additionalContext ?? "",
+      );
+      assert.match(additionalContext, /multi-step goal with no workflow keyword/);
+
+      const stateFile = join(cwd, ".omx", "state", "sessions", "triage-defaulted-1", "prompt-routing-state.json");
+      assert.equal(existsSync(stateFile), true);
+    } finally {
+      if (typeof previousCodexHome === "string") process.env.CODEX_HOME = previousCodexHome;
+      else delete process.env.CODEX_HOME;
+      resetTriageConfigCache();
+      await rm(tmpHome, { recursive: true, force: true });
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("does not suppress a short anchored follow-up that is a new request", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-triage-short-new-request-"));
+    const sessionId = "triage-short-new-request-1";
+    try {
+      await mkdir(join(cwd, ".omx", "state"), { recursive: true });
+
+      await dispatchCodexNativeHook(
+        {
+          hook_event_name: "UserPromptSubmit",
+          cwd,
+          session_id: sessionId,
+          thread_id: "thread-short-new-request-1",
+          turn_id: "turn-short-new-request-1",
+          prompt: "add dark mode toggle to the settings page",
+        },
+        { cwd },
+      );
+
+      const turn2 = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "UserPromptSubmit",
+          cwd,
+          session_id: sessionId,
+          thread_id: "thread-short-new-request-1",
+          turn_id: "turn-short-new-request-2",
+          prompt: "fix typo in src/foo.ts",
+        },
+        { cwd },
+      );
+
+      const ctx2 = String(
+        (turn2.outputJson as { hookSpecificOutput?: { additionalContext?: string } })?.hookSpecificOutput?.additionalContext ?? "",
+      );
+      assert.match(ctx2, /narrow edit-shaped/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("skips triage state persistence for malformed explicit session ids without writing root state", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-triage-invalid-session-"));
+    try {
+      await mkdir(join(cwd, ".omx", "state"), { recursive: true });
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "UserPromptSubmit",
+          cwd,
+          session_id: "bad/session",
+          thread_id: "thread-triage-invalid-session-1",
+          turn_id: "turn-triage-invalid-session-1",
+          prompt: "add dark mode toggle to the settings page",
+        },
+        { cwd },
+      );
+
+      const additionalContext = String(
+        (result.outputJson as { hookSpecificOutput?: { additionalContext?: string } })?.hookSpecificOutput?.additionalContext ?? "",
+      );
+      assert.match(additionalContext, /multi-step goal with no workflow keyword/);
+      assert.equal(existsSync(join(cwd, ".omx", "state", "prompt-routing-state.json")), false);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
 });

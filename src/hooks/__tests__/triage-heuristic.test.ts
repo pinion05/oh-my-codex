@@ -206,6 +206,12 @@ describe('triagePrompt — HEAVY', () => {
     assert.equal(result.destination, 'autopilot');
   });
 
+  it('routes mixed auth page flow redesign prompts to HEAVY instead of designer', () => {
+    const result = triagePrompt('redesign the auth page flow');
+    assert.equal(result.lane, 'HEAVY', `expected HEAVY got ${result.lane} (reason=${result.reason})`);
+    assert.equal(result.destination, 'autopilot');
+  });
+
   it('does not route non-visual deployment redesign prompts to LIGHT/designer', () => {
     const result = triagePrompt('redesign the deployment pipeline');
     assert.equal(result.lane, 'HEAVY', `expected HEAVY got ${result.lane} (reason=${result.reason})`);

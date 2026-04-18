@@ -146,9 +146,37 @@ describe('readTriageConfig — wrong shape', () => {
     assert.equal(result.enabled, false);
   });
 
-  it('returns invalid for object missing promptRouting key', () => {
+  it('returns defaulted for object missing promptRouting key', () => {
     resetTriageConfigCache();
     writeConfig(JSON.stringify({ unrelated: 123 }));
+    const result = readTriageConfig();
+    assert.equal(result.status, 'defaulted');
+    assert.equal(result.enabled, true);
+  });
+
+  it('returns defaulted when promptRouting exists but triage key is omitted', () => {
+    writeConfig(JSON.stringify({ promptRouting: {} }));
+    const result = readTriageConfig();
+    assert.equal(result.status, 'defaulted');
+    assert.equal(result.enabled, true);
+  });
+
+  it('returns defaulted when triage exists but enabled is omitted', () => {
+    writeConfig(JSON.stringify({ promptRouting: { triage: {} } }));
+    const result = readTriageConfig();
+    assert.equal(result.status, 'defaulted');
+    assert.equal(result.enabled, true);
+  });
+
+  it('returns invalid when promptRouting is present but not an object', () => {
+    writeConfig(JSON.stringify({ promptRouting: true }));
+    const result = readTriageConfig();
+    assert.equal(result.status, 'invalid');
+    assert.equal(result.enabled, false);
+  });
+
+  it('returns invalid when triage is present but not an object', () => {
+    writeConfig(JSON.stringify({ promptRouting: { triage: true } }));
     const result = readTriageConfig();
     assert.equal(result.status, 'invalid');
     assert.equal(result.enabled, false);

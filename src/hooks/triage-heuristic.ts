@@ -201,7 +201,15 @@ export function triagePrompt(prompt: string): TriageDecision {
     return { lane: "LIGHT", destination: "explore", reason: "short_question" };
   }
 
-  // ── Rule 4: Obvious visual / styling → LIGHT/designer ────────────────────
+  // ── Rule 4: Structural redesign goals → HEAVY ────────────────────────────
+  if (
+    BROAD_DESIGN_STARTERS.some((starter) => normalized.startsWith(starter)) &&
+    STRUCTURAL_REDESIGN_TERMS.some((pattern) => pattern.test(normalized))
+  ) {
+    return { lane: "HEAVY", destination: "autopilot", reason: "structural_redesign_goal" };
+  }
+
+  // ── Rule 5: Obvious visual / styling → LIGHT/designer ────────────────────
   for (const starter of DESIGNER_STARTERS) {
     if (normalized.startsWith(starter)) {
       return { lane: "LIGHT", destination: "designer", reason: "visual_styling_prompt" };
@@ -213,7 +221,7 @@ export function triagePrompt(prompt: string): TriageDecision {
     }
   }
 
-  // ── Rule 5: Short anchored edit → LIGHT/executor ─────────────────────────
+  // ── Rule 6: Short anchored edit → LIGHT/executor ─────────────────────────
   if (wordCount <= ANCHORED_EDIT_WORD_LIMIT) {
     for (const pattern of EXECUTOR_ANCHOR_PATTERNS) {
       if (pattern.test(normalized)) {
@@ -222,14 +230,7 @@ export function triagePrompt(prompt: string): TriageDecision {
     }
   }
 
-  // ── Rule 6: Longer goal-shaped imperative → HEAVY ────────────────────────
-  if (
-    BROAD_DESIGN_STARTERS.some((starter) => normalized.startsWith(starter)) &&
-    STRUCTURAL_REDESIGN_TERMS.some((pattern) => pattern.test(normalized))
-  ) {
-    return { lane: "HEAVY", destination: "autopilot", reason: "structural_redesign_goal" };
-  }
-
+  // ── Rule 7: Longer goal-shaped imperative → HEAVY ────────────────────────
   if (wordCount > HEAVY_WORD_THRESHOLD) {
     for (const verb of HEAVY_IMPERATIVE_VERBS) {
       if (normalized.startsWith(verb)) {
@@ -238,6 +239,6 @@ export function triagePrompt(prompt: string): TriageDecision {
     }
   }
 
-  // ── Rule 7: Fallback → PASS ───────────────────────────────────────────────
+  // ── Rule 8: Fallback → PASS ───────────────────────────────────────────────
   return { lane: "PASS", reason: "ambiguous_short_prompt" };
 }

@@ -45,16 +45,13 @@ export interface TriageStateFile {
 
 const STATE_FILENAME = 'prompt-routing-state.json';
 
-function resolveStatePath(workingDirectory?: string, sessionId?: string | null): string {
-  // Defense-in-depth: reject any sessionId that does not match the canonical pattern
-  // before it reaches getStateDir, so a malformed id can never escape the state dir.
-  const safeSessionId =
-    typeof sessionId === 'string' && SESSION_ID_PATTERN.test(sessionId)
-      ? sessionId
-      : undefined;
+function resolveStatePath(workingDirectory?: string, sessionId?: string | null): string | null {
+  if (typeof sessionId === 'string' && !SESSION_ID_PATTERN.test(sessionId)) {
+    return null;
+  }
   // getStateDir returns .omx/state/sessions/<sessionId>/ when sessionId is provided,
   // or .omx/state/ as the root fallback — exactly the paths we need.
-  const stateDir = getStateDir(workingDirectory ?? undefined, safeSessionId);
+  const stateDir = getStateDir(workingDirectory ?? undefined, sessionId ?? undefined);
   return join(stateDir, STATE_FILENAME);
 }
 
@@ -70,6 +67,7 @@ export interface ReadTriageStateArgs {
 export function readTriageState(args: ReadTriageStateArgs): TriageStateFile | null {
   try {
     const filePath = resolveStatePath(args.cwd, args.sessionId);
+    if (!filePath) return null;
     const raw = readFileSync(filePath, 'utf-8');
     const parsed: unknown = JSON.parse(raw);
     if (!isTriageStateFile(parsed)) return null;
@@ -90,6 +88,7 @@ export interface WriteTriageStateArgs extends ReadTriageStateArgs {
 export function writeTriageState(args: WriteTriageStateArgs): void {
   try {
     const filePath = resolveStatePath(args.cwd, args.sessionId);
+    if (!filePath) return;
     const dir = dirname(filePath);
     mkdirSync(dir, { recursive: true });
 
@@ -149,9 +148,8 @@ const CLARIFYING_STARTERS: readonly string[] = [
  *   1. A prior triage exists (previous?.last_triage != null).
  *   2. previous.suppress_followup === true.
  *   3. currentHasKeyword === false (keywords always bypass triage).
- *   4. The current prompt looks like a short clarifying reply:
- *      - word count <= 6, OR
- *      - starts with a clarifying token.
+ *   4. The current prompt looks like a clarifying reply and starts with a
+ *      known clarifying token. Short length alone is not enough.
  */
 export function shouldSuppressFollowup(args: ShouldSuppressArgs): boolean {
   if (args.currentHasKeyword) return false;
@@ -159,10 +157,6 @@ export function shouldSuppressFollowup(args: ShouldSuppressArgs): boolean {
   if (!args.previous.suppress_followup) return false;
 
   const prompt = args.currentPrompt; // already normalized (trim + lowercase)
-  const wordCount = prompt.length === 0 ? 0 : prompt.split(/\s+/).length;
-
-  if (wordCount <= 6) return true;
-
   for (const token of CLARIFYING_STARTERS) {
     if (prompt.startsWith(token)) return true;
   }
