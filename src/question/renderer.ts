@@ -1,10 +1,13 @@
 import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { parsePaneIdFromTmuxOutput } from '../hud/tmux.js';
 import { buildSendPaneArgvs } from '../notifications/tmux-detector.js';
 import { sleepSync } from '../utils/sleep.js';
 import { sanitizeReplyInput } from '../notifications/reply-listener.js';
 import { getCurrentTmuxPaneId } from '../notifications/tmux.js';
+import { getStatePath } from '../mcp/state-paths.js';
+import { TRACKED_WORKFLOW_MODES } from '../state/workflow-transition.js';
 import { resolveTmuxBinaryForPlatform } from '../utils/platform-command.js';
 import { resolveOmxCliEntryPath } from '../utils/paths.js';
 import type { QuestionAnswer, QuestionRendererState } from './types.js';
@@ -80,9 +83,68 @@ function defaultExecTmux(args: string[]): string {
   });
 }
 
-function resolveReturnTarget(env: NodeJS.ProcessEnv = process.env): string | undefined {
+function readJsonFileIfExists(path: string): Record<string, unknown> | null {
+  if (!existsSync(path)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf-8')) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function readPersistedQuestionReturnTarget(
+  cwd: string,
+  sessionId?: string,
+): string | undefined {
+  const candidatePaths: string[] = [];
+  if (sessionId) {
+    for (const mode of TRACKED_WORKFLOW_MODES) {
+      try {
+        candidatePaths.push(getStatePath(mode, cwd, sessionId));
+      } catch {
+        // Ignore invalid/absent state scopes and keep best-effort fallbacks.
+      }
+    }
+  }
+  for (const mode of TRACKED_WORKFLOW_MODES) {
+    try {
+      candidatePaths.push(getStatePath(mode, cwd));
+    } catch {
+      // Ignore invalid/absent state scopes and keep best-effort fallbacks.
+    }
+  }
+
+  const seen = new Set<string>();
+  for (const path of candidatePaths) {
+    if (seen.has(path)) continue;
+    seen.add(path);
+    const state = readJsonFileIfExists(path);
+    if (state?.active !== true) continue;
+    const pane = safeString(state.tmux_pane_id).trim();
+    if (isPaneId(pane)) return pane;
+  }
+
+  return undefined;
+}
+
+function resolveReturnTarget(options: {
+  cwd: string;
+  env?: NodeJS.ProcessEnv;
+  sessionId?: string;
+}): string | undefined {
+  const env = options.env ?? process.env;
+  const explicitPane = safeString(env.OMX_QUESTION_RETURN_PANE || env.OMX_LEADER_PANE_ID).trim();
+  if (isPaneId(explicitPane)) return explicitPane;
+
   const envPane = safeString(env.TMUX_PANE).trim();
   if (isPaneId(envPane)) return envPane;
+
+  const persistedPane = readPersistedQuestionReturnTarget(options.cwd, options.sessionId);
+  if (persistedPane) return persistedPane;
+
   const detectedPane = getCurrentTmuxPaneId();
   return isPaneId(detectedPane) ? detectedPane : undefined;
 }
@@ -178,6 +240,11 @@ export function launchQuestionRenderer(
   });
 
   if (strategy === 'inside-tmux') {
+    const returnTarget = resolveReturnTarget({
+      cwd: options.cwd,
+      env: options.env ?? process.env,
+      sessionId: options.sessionId,
+    });
     const rawPane = execTmux([
       'split-window',
       '-v',
@@ -196,7 +263,6 @@ export function launchQuestionRenderer(
     if (!isLaunchedQuestionPaneAlive(paneId, execTmux)) {
       throw new Error(`Question UI pane ${paneId} disappeared immediately after launch.`);
     }
-    const returnTarget = resolveReturnTarget(options.env ?? process.env);
     return {
       renderer: 'tmux-pane',
       target: paneId,

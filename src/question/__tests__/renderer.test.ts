@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import {
   formatQuestionAnswerForInjection,
@@ -155,6 +158,89 @@ describe('launchQuestionRenderer', () => {
     assert.deepEqual(calls[1], ['list-panes', '-t', '%42', '-F', '#{pane_dead}\t#{pane_id}']);
   });
 
+  it('falls back to the persisted session mode pane when Bash/tool env lost TMUX_PANE', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'omx-question-renderer-state-'));
+    try {
+      const stateDir = join(cwd, '.omx', 'state', 'sessions', 'sess-stateful');
+      mkdirSync(stateDir, { recursive: true });
+      writeFileSync(join(stateDir, 'ralplan-state.json'), JSON.stringify({
+        active: true,
+        mode: 'ralplan',
+        current_phase: 'planning',
+        tmux_pane_id: '%91',
+      }, null, 2));
+
+      const calls: string[][] = [];
+      const result = launchQuestionRenderer(
+        {
+          cwd,
+          recordPath: join(cwd, '.omx', 'state', 'sessions', 'sess-stateful', 'questions', 'question-3.json'),
+          sessionId: 'sess-stateful',
+          env: { TMUX: '/tmp/tmux-demo' } as NodeJS.ProcessEnv,
+        },
+        {
+          strategy: 'inside-tmux',
+          execTmux: (args) => {
+            calls.push(args);
+            if (args[0] === 'split-window') return '%77\n';
+            if (args[0] === 'list-panes') return '0\t%77\n';
+            return '';
+          },
+          sleepSync: () => {},
+        },
+      );
+
+      assert.equal(result.return_target, '%91');
+      assert.equal(result.return_transport, 'tmux-send-keys');
+      assert.equal(calls[0]?.[0], 'split-window');
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('prefers session-scoped persisted panes over root workflow fallback panes', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'omx-question-renderer-precedence-'));
+    try {
+      const rootStateDir = join(cwd, '.omx', 'state');
+      const sessionStateDir = join(rootStateDir, 'sessions', 'sess-stateful');
+      mkdirSync(sessionStateDir, { recursive: true });
+      writeFileSync(join(rootStateDir, 'team-state.json'), JSON.stringify({
+        active: true,
+        mode: 'team',
+        current_phase: 'executing',
+        tmux_pane_id: '%10',
+      }, null, 2));
+      writeFileSync(join(sessionStateDir, 'ralplan-state.json'), JSON.stringify({
+        active: true,
+        mode: 'ralplan',
+        current_phase: 'planning',
+        tmux_pane_id: '%91',
+      }, null, 2));
+
+      const result = launchQuestionRenderer(
+        {
+          cwd,
+          recordPath: join(sessionStateDir, 'questions', 'question-4.json'),
+          sessionId: 'sess-stateful',
+          env: { TMUX: '/tmp/tmux-demo' } as NodeJS.ProcessEnv,
+        },
+        {
+          strategy: 'inside-tmux',
+          execTmux: (args) => {
+            if (args[0] === 'split-window') return '%77\n';
+            if (args[0] === 'list-panes') return '0\t%77\n';
+            return '';
+          },
+          sleepSync: () => {},
+        },
+      );
+
+      assert.equal(result.return_target, '%91');
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('passes direct tmux argv so non-POSIX default shells do not parse a shell string', () => {
     const calls: string[][] = [];
     launchQuestionRenderer(
@@ -187,6 +273,44 @@ describe('launchQuestionRenderer', () => {
       '--state-path',
       '/repo/question with spaces.json',
     ]);
+  });
+
+  it('resolves the leader return target before opening the question pane', () => {
+    const calls: string[][] = [];
+    const originalTmuxPane = process.env.TMUX_PANE;
+    const originalTmux = process.env.TMUX;
+    process.env.TMUX_PANE = '%200';
+    process.env.TMUX = '/tmp/tmux-leader';
+    try {
+      const result = launchQuestionRenderer(
+        {
+          cwd: '/repo',
+          recordPath: '/repo/question-4.json',
+          sessionId: 'sess-123',
+          env: { TMUX: '/tmp/tmux-demo' } as NodeJS.ProcessEnv,
+        },
+        {
+          strategy: 'inside-tmux',
+          execTmux: (args) => {
+            calls.push(args);
+            if (args[0] === 'split-window') {
+              process.env.TMUX_PANE = '%201';
+              return '%201\n';
+            }
+            if (args[0] === 'list-panes') return '0\t%201\n';
+            return '';
+          },
+          sleepSync: () => {},
+        },
+      );
+
+      assert.equal(result.return_target, '%200');
+    } finally {
+      if (typeof originalTmuxPane === 'string') process.env.TMUX_PANE = originalTmuxPane;
+      else delete process.env.TMUX_PANE;
+      if (typeof originalTmux === 'string') process.env.TMUX = originalTmux;
+      else delete process.env.TMUX;
+    }
   });
 
   it('uses detached sessions outside tmux', () => {

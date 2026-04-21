@@ -654,6 +654,58 @@ describe('keyword detector skill-active-state lifecycle', () => {
     }
   });
 
+  it('captures tmux_pane_id in seeded ralplan prompt-submit state when TMUX_PANE is present', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-ralplan-pane-'));
+    const stateDir = join(cwd, '.omx', 'state');
+    const previousPane = process.env.TMUX_PANE;
+    try {
+      await mkdir(stateDir, { recursive: true });
+      process.env.TMUX_PANE = '%88';
+      const result = await recordSkillActivation({
+        stateDir,
+        text: '$ralplan tighten the plan',
+        sessionId: 'sess-ralplan-pane',
+        nowIso: '2026-02-25T00:00:00.000Z',
+      });
+
+      assert.ok(result);
+      const modeState = JSON.parse(
+        await readFile(join(stateDir, 'sessions', 'sess-ralplan-pane', 'ralplan-state.json'), 'utf-8'),
+      ) as { tmux_pane_id?: string };
+      assert.equal(modeState.tmux_pane_id, '%88');
+    } finally {
+      if (typeof previousPane === 'string') process.env.TMUX_PANE = previousPane;
+      else delete process.env.TMUX_PANE;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('captures tmux_pane_id in deep-interview prompt-submit state when TMUX_PANE is present', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-deep-interview-pane-'));
+    const stateDir = join(cwd, '.omx', 'state');
+    const previousPane = process.env.TMUX_PANE;
+    try {
+      await mkdir(stateDir, { recursive: true });
+      process.env.TMUX_PANE = '%89';
+      const result = await recordSkillActivation({
+        stateDir,
+        text: '$deep-interview tighten the requirements',
+        sessionId: 'sess-deep-interview-pane',
+        nowIso: '2026-02-25T00:00:00.000Z',
+      });
+
+      assert.ok(result);
+      const modeState = JSON.parse(
+        await readFile(join(stateDir, 'sessions', 'sess-deep-interview-pane', 'deep-interview-state.json'), 'utf-8'),
+      ) as { tmux_pane_id?: string };
+      assert.equal(modeState.tmux_pane_id, '%89');
+    } finally {
+      if (typeof previousPane === 'string') process.env.TMUX_PANE = previousPane;
+      else delete process.env.TMUX_PANE;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('seeds first-class state for ralplan prompt-submit activation', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-ralplan-'));
     const stateDir = join(cwd, '.omx', 'state');

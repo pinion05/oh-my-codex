@@ -840,7 +840,9 @@ describe("codex native hook dispatch", () => {
       assert.match(message, /do not fall back to `request_user_input` or plain-text questioning/i);
       assert.match(message, /After starting `omx question` in a background terminal, wait for that terminal to finish and read the JSON answer before continuing the interview\./);
       assert.match(message, /If bare `omx question` is unavailable in this reused session, use the current-session CLI bridge command:/);
-      assert.match(message, /`'.+' '.+dist\/cli\/omx\.js' question`/);
+      assert.match(message, /OMX_QUESTION_RETURN_PANE=/);
+      assert.match(message, /preserve the leader pane/i);
+      assert.match(message, /`OMX_QUESTION_RETURN_PANE='?%\d+'? '.+' '.+dist\/cli\/omx\.js' question`/);
       assert.match(message, /Stop remains blocked while a deep-interview question obligation is pending\./);
     } finally {
       await rm(cwd, { recursive: true, force: true });
@@ -1237,6 +1239,91 @@ esac
       }
       process.env.PATH = originalPath;
       process.argv = originalArgv;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks Bash omx question when no leader-pane return hint is preserved", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-question-enforce-"));
+    try {
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-question-block",
+          tool_input: { command: `omx question --json --input '{"question":"Q?","options":["A"],"allow_other":true}'` },
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "pre-tool-use");
+      assert.equal((result.outputJson as { decision?: string } | null)?.decision, "block");
+      assert.match(String((result.outputJson as { systemMessage?: string } | null)?.systemMessage || ""), /OMX_QUESTION_RETURN_PANE=\$TMUX_PANE/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("allows Bash omx question when the command preserves the leader-pane return hint", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-question-allow-"));
+    try {
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-question-allow",
+          tool_input: { command: `OMX_QUESTION_RETURN_PANE=$TMUX_PANE omx question --json --input '{"question":"Q?","options":["A"],"allow_other":true}'` },
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "pre-tool-use");
+      assert.equal(result.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("allows the quoted pane env assignment emitted by the deep-interview bridge command", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-question-quoted-allow-"));
+    try {
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-question-quoted-allow",
+          tool_input: { command: `OMX_QUESTION_RETURN_PANE='%42' node ./dist/cli/omx.js question --json --input '{"question":"Q?","options":["A"],"allow_other":true}'` },
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "pre-tool-use");
+      assert.equal(result.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks Bash node omx.js question when the command does not preserve the leader-pane return hint", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-question-node-block-"));
+    try {
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-question-node-block",
+          tool_input: { command: `node ./dist/cli/omx.js question --json --input '{"question":"Q?","options":["A"],"allow_other":true}'` },
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "pre-tool-use");
+      assert.equal((result.outputJson as { decision?: string } | null)?.decision, "block");
+    } finally {
       await rm(cwd, { recursive: true, force: true });
     }
   });
