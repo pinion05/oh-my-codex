@@ -24,6 +24,7 @@ export type SleepSync = (ms: number) => void;
 const QUESTION_TEXT_SETTLE_MS = 120;
 const QUESTION_SUBMIT_REPEAT_DELAY_MS = 100;
 const QUESTION_RENDERER_PANE_SETTLE_MS = 120;
+const QUESTION_RENDERER_SESSION_SETTLE_MS = 120;
 
 function safeString(value: unknown): string {
   return typeof value === 'string' ? value : '';
@@ -99,6 +100,19 @@ function isLaunchedQuestionPaneAlive(
         const [paneDead = '', resolvedPaneId = ''] = line.split('\t');
         return resolvedPaneId === paneId && paneDead !== '1';
       });
+  } catch {
+    return false;
+  }
+}
+
+function isLaunchedQuestionSessionAlive(
+  sessionName: string,
+  execTmux: ExecTmuxSync,
+): boolean {
+  if (!safeString(sessionName).trim()) return false;
+  try {
+    execTmux(['has-session', '-t', sessionName]);
+    return true;
   } catch {
     return false;
   }
@@ -197,9 +211,14 @@ export function launchQuestionRenderer(
       options.cwd,
       ...commandArgs,
     ]).trim();
+    const target = output || sessionName;
+    sleepImpl(QUESTION_RENDERER_SESSION_SETTLE_MS);
+    if (!isLaunchedQuestionSessionAlive(target, execTmux)) {
+      throw new Error(`Question UI session ${target} disappeared immediately after launch.`);
+    }
     return {
       renderer: 'tmux-session',
-      target: output || sessionName,
+      target,
       launched_at: launchedAt,
     };
   }

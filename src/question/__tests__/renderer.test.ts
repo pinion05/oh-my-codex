@@ -157,13 +157,15 @@ describe('launchQuestionRenderer', () => {
         strategy: 'detached-tmux',
         execTmux: (args) => {
           calls.push(args);
+          if (args[0] === 'has-session') return '';
           return 'omx-question-question-2\n';
         },
+        sleepSync: () => {},
       },
     );
 
     assert.equal(result.renderer, 'tmux-session');
-    assert.equal(calls.length, 1);
+    assert.equal(calls.length, 2);
     assert.equal(calls[0]?.[0], 'new-session');
     assert.ok(calls[0]?.includes('-d'));
     assert.equal(calls[0]?.[calls[0]!.length - 6], process.execPath);
@@ -174,6 +176,35 @@ describe('launchQuestionRenderer', () => {
       '--state-path',
       '/repo/.omx/state/sessions/s1/questions/question-2.json',
     ]);
+    assert.deepEqual(calls[1], ['has-session', '-t', 'omx-question-question-2']);
+  });
+
+  it('fails when a detached tmux session disappears immediately after launch', () => {
+    const calls: string[][] = [];
+    assert.throws(
+      () => launchQuestionRenderer(
+        {
+          cwd: '/repo',
+          recordPath: '/repo/.omx/state/sessions/s1/questions/question-2.json',
+          nowIso: '2026-04-19T00:00:00.000Z',
+          env: {} as NodeJS.ProcessEnv,
+        },
+        {
+          strategy: 'detached-tmux',
+          execTmux: (args) => {
+            calls.push(args);
+            if (args[0] === 'new-session') return 'omx-question-question-2\n';
+            throw new Error('can\'t find session: omx-question-question-2');
+          },
+          sleepSync: () => {},
+        },
+      ),
+      /Question UI session omx-question-question-2 disappeared immediately after launch/,
+    );
+
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0]?.[0], 'new-session');
+    assert.deepEqual(calls[1], ['has-session', '-t', 'omx-question-question-2']);
   });
 
   it('prefers the current launcher path over a stale ambient OMX_ENTRY_PATH when spawning the UI', () => {
