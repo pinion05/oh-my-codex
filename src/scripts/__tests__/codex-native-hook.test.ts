@@ -1263,8 +1263,8 @@ esac
 
       assert.equal(result.omxEventName, "keyword-detector");
       const tmuxCalls = await readFile(tmuxLog, "utf-8");
-      assert.match(tmuxCalls, /list-panes/);
-      assert.match(tmuxCalls, /split-window/);
+      assert.match(tmuxCalls, /list-panes -t %1 -F/);
+      assert.match(tmuxCalls, /split-window -v -l 3 -d -t %1 -c/);
       assert.match(tmuxCalls, /resize-pane -t %9 -y 3/);
       assert.match(tmuxCalls, /dist\/cli\/omx\.js' hud --watch --preset=focused/);
       assert.doesNotMatch(tmuxCalls, /\/tmp\/codex-host-binary' hud --watch/);
