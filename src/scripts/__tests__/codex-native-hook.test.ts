@@ -838,6 +838,7 @@ describe("codex native hook dispatch", () => {
       assert.match(message, /skill: deep-interview activated and initial state initialized at \.omx\/state\/sessions\/sess-deep-interview-msg\/deep-interview-state\.json; write subsequent updates via omx_state MCP\./);
       assert.match(message, /Deep-interview must ask each interview round via `omx question`/);
       assert.match(message, /do not fall back to `request_user_input` or plain-text questioning/i);
+      assert.match(message, /After starting `omx question` in a background terminal, wait for that terminal to finish and read the JSON answer before continuing the interview\./);
       assert.match(message, /If bare `omx question` is unavailable in this reused session, use the current-session CLI bridge command:/);
       assert.match(message, /`'.+' '.+dist\/cli\/omx\.js' question`/);
       assert.match(message, /Stop remains blocked while a deep-interview question obligation is pending\./);

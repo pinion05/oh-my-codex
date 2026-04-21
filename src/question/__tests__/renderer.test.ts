@@ -6,6 +6,7 @@ import {
   launchQuestionRenderer,
   resolveQuestionRendererStrategy,
 } from '../renderer.js';
+import { buildSendPaneArgvs } from '../../notifications/tmux-detector.js';
 
 describe('resolveQuestionRendererStrategy', () => {
   it('prefers inside-tmux when TMUX is present', () => {
@@ -280,11 +281,7 @@ describe('question answer injection', () => {
     );
 
     assert.equal(ok, true);
-    assert.deepEqual(calls, [
-      ['send-keys', '-t', '%11', '-l', '--', '[omx question answered] proceed'],
-      ['send-keys', '-t', '%11', 'C-m'],
-      ['send-keys', '-t', '%11', 'C-m'],
-    ]);
+    assert.deepEqual(calls, buildSendPaneArgvs('%11', '[omx question answered] proceed', true));
     assert.deepEqual(sleeps, [120, 100]);
     assert.equal(calls.some((argv) => argv.includes('Enter')), false);
   });

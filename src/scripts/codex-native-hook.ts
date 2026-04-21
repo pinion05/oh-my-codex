@@ -569,7 +569,7 @@ async function buildSessionStartContext(
 function buildDeepInterviewQuestionBridgeInstruction(cwd: string): string {
   const omxBin = resolveOmxCliEntryPath({ cwd }) || process.argv[1] || "omx";
   const bridgeCommand = `${shellEscapeSingle(process.execPath)} ${shellEscapeSingle(omxBin)} question`;
-  return `Deep-interview must ask each interview round via \`omx question\`; do not fall back to \`request_user_input\` or plain-text questioning. If bare \`omx question\` is unavailable in this reused session, use the current-session CLI bridge command: \`${bridgeCommand}\`. Stop remains blocked while a deep-interview question obligation is pending.`;
+  return `Deep-interview must ask each interview round via \`omx question\`; do not fall back to \`request_user_input\` or plain-text questioning. After starting \`omx question\` in a background terminal, wait for that terminal to finish and read the JSON answer before continuing the interview. If bare \`omx question\` is unavailable in this reused session, use the current-session CLI bridge command: \`${bridgeCommand}\`. Stop remains blocked while a deep-interview question obligation is pending.`;
 }
 
 function buildAdditionalContextMessage(
