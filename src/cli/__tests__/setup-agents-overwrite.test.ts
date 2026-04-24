@@ -49,6 +49,7 @@ async function runSetupWithCapturedLogs(
   };
   try {
     await setup({
+      installModePrompt: async (defaultMode) => defaultMode,
       modelUpgradePrompt: async () => false,
       ...options,
     });
