@@ -629,8 +629,8 @@ function resolveExecutionEnvironment(
       kind: "attached-tmux-runtime",
       launcher: executionSurface.launcher,
       transport: executionSurface.transport,
-      surface: "attached tmux runtime",
-      tmuxWorkflowGuidance: "tmux-only workflows are directly usable in this session",
+      surface: "attached tmux runtime - tmux",
+      tmuxWorkflowGuidance: "omx team, omx hud, and omx question are directly usable in this session",
       questionGuidance: "visible renderer available from the current pane",
       teamRuntimeInstruction: "Use the durable OMX team runtime via `omx team ...` for coordinated execution; do not replace it with in-process fanout.",
       teamHelpInstruction: "If you need runtime syntax, run `omx team --help` yourself.",
@@ -648,7 +648,7 @@ function resolveExecutionEnvironment(
       surface: isNativeOutsideTmux
         ? "native-hook / Codex App outside tmux with tmux return bridge"
         : "direct CLI outside tmux with tmux return bridge",
-      tmuxWorkflowGuidance: "tmux-only workflows are not directly usable from this surface; launch OMX CLI from an attached tmux shell for `$team` / `omx team`",
+      tmuxWorkflowGuidance: "omx team and omx hud need an attached tmux OMX CLI shell from this surface; omx question can use the detected bridge",
       questionGuidance: questionBridgeHint,
       teamRuntimeInstruction: isNativeOutsideTmux
         ? "This session is native-hook / Codex App outside tmux; `omx team` is a CLI/tmux runtime surface, not directly available here. Launch OMX CLI from an attached tmux shell first; do not replace it with in-process fanout."
@@ -676,7 +676,7 @@ function resolveExecutionEnvironment(
     launcher: executionSurface.launcher,
     transport: executionSurface.transport,
     surface,
-    tmuxWorkflowGuidance: "tmux-only workflows are not directly usable from this surface; launch OMX CLI from an attached tmux shell when you actually need tmux runtime workflows",
+    tmuxWorkflowGuidance: "omx team, omx hud, and omx question need an attached tmux OMX CLI shell or preserved question bridge from this surface",
     questionGuidance: questionBridgeHint,
     teamRuntimeInstruction,
     teamHelpInstruction,
@@ -698,7 +698,7 @@ function buildExecutionEnvironmentSection(
   return [
     "[Execution environment]",
     `- surface: ${environment.surface}`,
-    `- tmux workflows: ${environment.tmuxWorkflowGuidance}`,
+    `- omx runtime surfaces: ${environment.tmuxWorkflowGuidance}`,
     `- omx question: ${environment.questionGuidance}`,
   ].join("\n");
 }

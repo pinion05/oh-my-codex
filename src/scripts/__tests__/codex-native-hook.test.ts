@@ -264,7 +264,7 @@ describe("codex native hook dispatch", () => {
       );
       assert.match(additionalContext, /\[Execution environment\]/);
       assert.match(additionalContext, /native-hook \/ Codex App outside tmux/);
-      assert.match(additionalContext, /tmux-only workflows are not directly usable/);
+      assert.match(additionalContext, /omx team, omx hud, and omx quest(?:ion) need an attached tmux OMX CLI shell|omx team and omx hud need an attached tmux OMX CLI shell/);
       assert.match(additionalContext, /not available from this outside-tmux surface/);
       const sessionState = JSON.parse(
         await readFile(join(cwd, ".omx", "state", "session.json"), "utf-8"),
@@ -353,7 +353,7 @@ describe("codex native hook dispatch", () => {
       );
       assert.match(additionalContext, /\[Execution environment\]/);
       assert.match(additionalContext, /attached tmux runtime/);
-      assert.match(additionalContext, /tmux-only workflows are directly usable/);
+      assert.match(additionalContext, /omx team, omx hud, and omx quest(?:ion) are directly usable in this session/);
       assert.match(additionalContext, /visible renderer available from the current pane/);
     } finally {
       await rm(cwd, { recursive: true, force: true });
@@ -382,7 +382,7 @@ describe("codex native hook dispatch", () => {
       assert.match(additionalContext, /\[Execution environment\]/);
       assert.match(additionalContext, /direct CLI outside tmux/);
       assert.doesNotMatch(additionalContext, /native-hook \/ Codex App outside tmux/);
-      assert.match(additionalContext, /tmux-only workflows are not directly usable/);
+      assert.match(additionalContext, /omx team, omx hud, and omx quest(?:ion) need an attached tmux OMX CLI shell|omx team and omx hud need an attached tmux OMX CLI shell/);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

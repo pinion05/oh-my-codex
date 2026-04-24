@@ -28,6 +28,7 @@ import {
   resolveTeamWorkerLaunchArgsEnv,
   injectModelInstructionsBypassArgs,
   resolveWorkerSparkModel,
+  resolveSetupInstallModeArg,
   resolveSetupScopeArg,
   readPersistedSetupPreferences,
   readPersistedSetupScope,
@@ -1041,6 +1042,17 @@ describe("resolveCliInvocation", () => {
 
   it("advertises the explicit update command in top-level help", () => {
     assert.match(HELP, /omx update\s+Check npm now, update the global install immediately, then refresh setup/);
+  });
+});
+
+describe("resolveSetupInstallModeArg", () => {
+  it("maps --plugin to plugin install mode", () => {
+    assert.equal(resolveSetupInstallModeArg(["--dry-run"]), undefined);
+    assert.equal(resolveSetupInstallModeArg(["--plugin"]), "plugin");
+    assert.equal(
+      resolveSetupInstallModeArg(["--scope", "project", "--plugin"]),
+      "plugin",
+    );
   });
 });
 

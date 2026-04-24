@@ -7,7 +7,7 @@ import { execFileSync, spawn } from "child_process";
 import { basename, dirname, join } from "path";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
 import { constants as osConstants } from "os";
-import { setup, SETUP_SCOPES, type SetupScope } from "./setup.js";
+import { setup, SETUP_SCOPES, type SetupInstallMode, type SetupScope } from "./setup.js";
 import { uninstall } from "./uninstall.js";
 import { version } from "./version.js";
 import { tmuxHookCommand } from "./tmux-hook.js";
@@ -223,6 +223,7 @@ Options:
                 Launch Codex in a git worktree (detached when no name is given)
   --force       Force reinstall (overwrite existing files)
   --dry-run     Show what would be done without doing it
+  --plugin      Use Codex plugin delivery for omx setup and remove legacy OMX-managed user/project components
   --keep-config Skip config.toml cleanup during uninstall
   --purge       Remove .omx/ cache directory during uninstall
   --verbose     Show detailed output
@@ -329,6 +330,11 @@ const NESTED_HELP_COMMANDS = new Set<CliCommand>([
 export interface ResolvedCliInvocation {
   command: CliCommand;
   launchArgs: string[];
+}
+
+export function resolveSetupInstallModeArg(args: string[]): SetupInstallMode | undefined {
+  if (args.includes("--plugin")) return "plugin";
+  return undefined;
 }
 
 export function resolveSetupScopeArg(args: string[]): SetupScope | undefined {
@@ -661,6 +667,7 @@ export async function main(args: string[]): Promise<void> {
           dryRun: options.dryRun,
           verbose: options.verbose,
           scope: resolveSetupScopeArg(args.slice(1)),
+          installMode: resolveSetupInstallModeArg(args.slice(1)),
         });
         break;
       case "update":
