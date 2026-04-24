@@ -1,6 +1,6 @@
 {
   "name": "oh-my-codex",
-  "version": "0.14.3",
+  "version": "0.14.4",
   "description": "Multi-agent orchestration layer for OpenAI Codex CLI",
   "type": "module",
   "main": "dist/index.js",
@@ -62,7 +62,9 @@
     "skills/",
     "prompts/",
     "templates/",
-    "src/scripts/"
+    "src/scripts/",
+    "plugins/",
+    ".agents/plugins/marketplace.json"
   ],
   "keywords": [
     "codex",
