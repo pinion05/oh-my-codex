@@ -3711,7 +3711,17 @@ esac
         undefined,
         { ...process.env, OMX_SESSION_ID: "sess-stop-team-worker" },
       );
+      const workerCwd = join(cwd, ".omx", "team", "worker-stop-team", "worktrees", "worker-1");
       const workerDir = join(cwd, ".omx", "state", "team", "worker-stop-team", "workers", "worker-1");
+      await mkdir(workerCwd, { recursive: true });
+      await writeJson(join(workerDir, "identity.json"), {
+        name: "worker-1",
+        index: 1,
+        role: "executor",
+        assigned_tasks: ["1"],
+        worktree_path: workerCwd,
+        team_state_root: join(cwd, ".omx", "state"),
+      });
       await writeJson(join(workerDir, "status.json"), {
         state: "idle",
         current_task_id: "1",
@@ -3733,10 +3743,10 @@ esac
       const result = await dispatchCodexNativeHook(
         {
           hook_event_name: "Stop",
-          cwd: join(cwd, ".omx", "team", "worker-stop-team", "worktrees", "worker-1"),
+          cwd: workerCwd,
           session_id: "sess-stop-team-worker",
         },
-        { cwd: join(cwd, ".omx", "team", "worker-stop-team", "worktrees", "worker-1") },
+        { cwd: workerCwd },
       );
 
       assert.deepEqual(result.outputJson, {
@@ -3772,6 +3782,16 @@ esac
       const stateDir = join(cwd, ".omx", "state");
       const workerDir = join(stateDir, "team", "worker-repeat-team", "workers", "worker-1");
       const taskPath = join(stateDir, "team", "worker-repeat-team", "tasks", "task-1.json");
+      const workerCwd = join(cwd, ".omx", "team", "worker-repeat-team", "worktrees", "worker-1");
+      await mkdir(workerCwd, { recursive: true });
+      await writeJson(join(workerDir, "identity.json"), {
+        name: "worker-1",
+        index: 1,
+        role: "executor",
+        assigned_tasks: ["1"],
+        worktree_path: workerCwd,
+        team_state_root: stateDir,
+      });
       await writeJson(join(workerDir, "status.json"), {
         state: "idle",
         current_task_id: "1",
@@ -3790,7 +3810,6 @@ esac
       process.env.OMX_TEAM_STATE_ROOT = stateDir;
       process.env.OMX_TEAM_LEADER_CWD = cwd;
 
-      const workerCwd = join(cwd, ".omx", "team", "worker-repeat-team", "worktrees", "worker-1");
       const basePayload = {
         hook_event_name: "Stop",
         cwd: workerCwd,

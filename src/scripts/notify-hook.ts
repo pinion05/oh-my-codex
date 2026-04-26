@@ -183,9 +183,11 @@ async function main() {
   const parsedTeamWorker = parseTeamWorkerEnv(teamWorkerEnv);
   const isTeamWorker = !!parsedTeamWorker;
 
-  const stateDir = (isTeamWorker && parsedTeamWorker)
+  const resolvedWorkerStateDir = (isTeamWorker && parsedTeamWorker)
     ? await resolveTeamStateDirForWorker(cwd, parsedTeamWorker)
-    : join(cwd, '.omx', 'state');
+    : null;
+  const stateDir = resolvedWorkerStateDir || join(cwd, '.omx', 'state');
+  const workerStateRootResolved = !isTeamWorker || !!resolvedWorkerStateDir;
   const logsDir = join(cwd, '.omx', 'logs');
   const omxDir = join(cwd, '.omx');
   let currentOmxSessionId = '';
