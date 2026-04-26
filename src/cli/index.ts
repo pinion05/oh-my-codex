@@ -1654,6 +1654,38 @@ function writeTmuxExtendedKeysLeaseState(
   writeFileSync(leasePath, JSON.stringify(state, null, 2));
 }
 
+function parseTmuxExtendedKeysLeaseHolderPid(holder: string): number | null {
+  const match = /^([1-9]\d*)-/.exec(holder);
+  if (!match) return null;
+  const pid = Number.parseInt(match[1], 10);
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    const code =
+      err && typeof err === "object" && "code" in err
+        ? String((err as NodeJS.ErrnoException).code)
+        : "";
+    return code === "EPERM";
+  }
+}
+
+function reapDeadTmuxExtendedKeysLeaseHolders(
+  state: TmuxExtendedKeysLeaseState,
+): TmuxExtendedKeysLeaseState {
+  return {
+    originalMode: state.originalMode,
+    holders: state.holders.filter((holder) => {
+      const pid = parseTmuxExtendedKeysLeaseHolderPid(holder);
+      return pid !== null && isProcessAlive(pid);
+    }),
+  };
+}
+
 function withTmuxExtendedKeysLeaseLock<T>(
   cwd: string,
   socketPath: string,
@@ -1754,13 +1786,24 @@ export function acquireTmuxExtendedKeysLease(
       encoding: "utf-8",
       ...(process.platform === "win32" ? { windowsHide: true } : {}),
     }) as string,
+  ownerPid = process.pid,
 ): string | null {
   try {
     const socketPath = resolveTmuxSocketPath(execFileSyncImpl);
     const leasePath = tmuxExtendedKeysLeasePath(cwd, socketPath);
-    const leaseId = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const holderPid =
+      Number.isSafeInteger(ownerPid) && ownerPid > 0 ? ownerPid : process.pid;
+    const leaseId = `${holderPid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     withTmuxExtendedKeysLeaseLock(cwd, socketPath, () => {
-      const state = readTmuxExtendedKeysLeaseState(leasePath);
+      const stateRaw = readTmuxExtendedKeysLeaseState(leasePath);
+      const state = stateRaw ? reapDeadTmuxExtendedKeysLeaseHolders(stateRaw) : null;
+      if (stateRaw && state?.holders.length === 0) {
+        execTmuxSync(
+          ["set-option", "-sq", "extended-keys", state.originalMode],
+          execFileSyncImpl,
+        );
+        rmSync(leasePath, { force: true });
+      }
       if (!state || state.holders.length === 0) {
         const previousMode =
           execTmuxSync(["show-options", "-sv", "extended-keys"], execFileSyncImpl) ||
@@ -1803,8 +1846,15 @@ export function releaseTmuxExtendedKeysLease(
   try {
     const leasePath = tmuxExtendedKeysLeasePath(cwd, socketPath);
     withTmuxExtendedKeysLeaseLock(cwd, socketPath, () => {
-      const state = readTmuxExtendedKeysLeaseState(leasePath);
+      const stateRaw = readTmuxExtendedKeysLeaseState(leasePath);
+      const state = stateRaw ? reapDeadTmuxExtendedKeysLeaseHolders(stateRaw) : null;
       if (!state || state.holders.length === 0) {
+        if (stateRaw) {
+          execTmuxSync(
+            ["set-option", "-sq", "extended-keys", stateRaw.originalMode],
+            execFileSyncImpl,
+          );
+        }
         rmSync(leasePath, { force: true });
         return;
       }
@@ -1837,13 +1887,13 @@ function buildTmuxExtendedKeysHelperCommand(
   const moduleUrlLiteral = JSON.stringify(import.meta.url);
   const script =
     operation === "acquire"
-      ? `const mod = await import(${moduleUrlLiteral}); const lease = mod.acquireTmuxExtendedKeysLease(${cwdLiteral}); if (lease) process.stdout.write(lease);`
+      ? `const mod = await import(${moduleUrlLiteral}); const ownerPid = Number.parseInt(process.argv[1] ?? "", 10); const lease = mod.acquireTmuxExtendedKeysLease(${cwdLiteral}, undefined, Number.isSafeInteger(ownerPid) && ownerPid > 0 ? ownerPid : undefined); if (lease) process.stdout.write(lease);`
       : `const mod = await import(${moduleUrlLiteral}); mod.releaseTmuxExtendedKeysLease(${cwdLiteral}, process.argv[1] ?? "");`;
   return `${quoteShellArg(process.execPath)} --input-type=module -e ${quoteShellArg(script)}`;
 }
 
 function buildTmuxExtendedKeysAcquireShellSnippet(cwd: string): string {
-  return `OMX_TMUX_EXTENDED_KEYS_LEASE=$(${buildTmuxExtendedKeysHelperCommand(cwd, "acquire")} 2>/dev/null || true);`;
+  return `OMX_TMUX_EXTENDED_KEYS_LEASE=$(${buildTmuxExtendedKeysHelperCommand(cwd, "acquire")} "$$" 2>/dev/null || true);`;
 }
 
 function buildTmuxExtendedKeysReleaseShellSnippet(cwd: string): string {

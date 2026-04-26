@@ -2004,6 +2004,24 @@ exit 0
     ]);
   });
 
+  it("acquireTmuxExtendedKeysLease can bind lease liveness to a long-lived owner pid", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-tmux-lease-owner-pid-"));
+    try {
+      const execStub = (_file: string, args: readonly string[]) => {
+        if (args[0] === "display-message") return "/tmp/tmux-owner-pid.sock\n";
+        if (args[0] === "show-options") return "off\n";
+        return "";
+      };
+
+      const lease = acquireTmuxExtendedKeysLease(cwd, execStub, 12345);
+
+      assert.match(lease ?? "", /^\/tmp\/tmux-owner-pid\.sock\t12345-/);
+      if (lease) releaseTmuxExtendedKeysLease(cwd, lease, execStub);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("overlapping tmux extended-keys leases restore only after the last holder exits", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-tmux-lease-overlap-"));
     const calls: string[][] = [];
@@ -2183,6 +2201,83 @@ exit 0
 
     if (lease) releaseTmuxExtendedKeysLease(cwd, lease, execStub);
     await rm(cwd, { recursive: true, force: true });
+  });
+
+  it("acquireTmuxExtendedKeysLease reaps dead holders and restores before taking a new lease", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-tmux-dead-holder-acquire-"));
+    try {
+      const leaseDir = join(cwd, ".omx", "state", "tmux-extended-keys");
+      const leasePath = join(leaseDir, "tmp-stale-holder-sock.json");
+      await mkdir(leaseDir, { recursive: true });
+      await writeFile(
+        leasePath,
+        JSON.stringify({
+          originalMode: "off",
+          holders: ["2147483647-stale-holder"],
+        }),
+        "utf-8",
+      );
+
+      const calls: string[][] = [];
+      const execStub = (_file: string, args: readonly string[]): string => {
+        calls.push([...args]);
+        if (args[0] === "display-message") return "/tmp/stale-holder.sock\n";
+        if (args[0] === "show-options") return "off\n";
+        return "";
+      };
+
+      const lease = acquireTmuxExtendedKeysLease(cwd, execStub);
+
+      assert.equal(typeof lease, "string");
+      const persisted = JSON.parse(await readFile(leasePath, "utf-8")) as {
+        holders: string[];
+      };
+      assert.equal(persisted.holders.length, 1);
+      assert.match(persisted.holders[0] ?? "", new RegExp(`^${process.pid}-`));
+      assert.doesNotMatch(JSON.stringify(persisted), /2147483647-stale-holder/);
+
+      if (lease) releaseTmuxExtendedKeysLease(cwd, lease, execStub);
+
+      assert.deepEqual(calls, [
+        ["display-message", "-p", "#{socket_path}"],
+        ["set-option", "-sq", "extended-keys", "off"],
+        ["show-options", "-sv", "extended-keys"],
+        ["set-option", "-sq", "extended-keys", "always"],
+        ["set-option", "-sq", "extended-keys", "off"],
+      ]);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("releaseTmuxExtendedKeysLease restores when all remaining holders are dead", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-tmux-dead-holder-release-"));
+    try {
+      const leaseDir = join(cwd, ".omx", "state", "tmux-extended-keys");
+      const leasePath = join(leaseDir, "tmp-dead-release-sock.json");
+      await mkdir(leaseDir, { recursive: true });
+      await writeFile(
+        leasePath,
+        JSON.stringify({
+          originalMode: "off",
+          holders: ["2147483647-stale-holder"],
+        }),
+        "utf-8",
+      );
+
+      const calls: string[][] = [];
+      const execStub = (_file: string, args: readonly string[]): string => {
+        calls.push([...args]);
+        return "";
+      };
+
+      releaseTmuxExtendedKeysLease(cwd, "/tmp/dead-release.sock\tmissing-holder", execStub);
+
+      assert.ok(!existsSync(leasePath), "stale-only lease file should be removed");
+      assert.deepEqual(calls, [["set-option", "-sq", "extended-keys", "off"]]);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
     it("buildDetachedSessionFinalizeSteps keeps schedule after split-capture and before attach", () => {
     const steps = buildDetachedSessionFinalizeSteps(
