@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { existsSync } from "fs";
 import { appendFile, mkdir, readFile, rename, writeFile } from "fs/promises";
-import { join, resolve } from "path";
+import { join } from "path";
 import { normalizePostToolUsePayload } from "../codex-native-pre-post.js";
 import { resolveWorkerTeamStateRoot } from "../../team/state-root.js";
 
