@@ -12,7 +12,7 @@ import {
   readSubagentSessionSummary,
   recordSubagentTurnForSession,
 } from "../subagents/tracker.js";
-import { resolveCanonicalTeamStateRoot, resolveWorkerTeamStateRootPath } from "../team/state-root.js";
+import { resolveCanonicalTeamStateRoot, resolveWorkerNotifyTeamStateRootPath } from "../team/state-root.js";
 import {
   appendToLog,
   isSessionStateUsable,
@@ -1081,7 +1081,7 @@ async function resolveTeamStateDirForWorkerContext(
   cwd: string,
   workerContext: { teamName: string; workerName: string },
 ): Promise<string | null> {
-  return resolveWorkerTeamStateRootPath(cwd, workerContext, process.env);
+  return resolveWorkerNotifyTeamStateRootPath(cwd, workerContext, process.env);
 }
 
 

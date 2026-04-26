@@ -1,7 +1,7 @@
 import { existsSync } from 'fs'
 import { mkdir, readFile } from 'fs/promises'
-import { join, resolve } from 'path'
-import type { TeamTask } from './state.js'
+import { basename, dirname, join, resolve } from 'path'
+import type { TeamConfig, TeamTask } from './state.js'
 import { writeAtomic } from './state.js'
 
 export type TeamOperationalCommitKind =
@@ -100,6 +100,41 @@ export interface TeamCommitHygieneContext {
 export interface TeamCommitHygieneArtifactPaths {
   jsonPath: string;
   markdownPath: string;
+}
+
+function safePath(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : null
+}
+
+function projectRootFromOmxStateRoot(stateRoot: string | null, cwd: string): string | null {
+  if (!stateRoot) return null
+  const resolvedStateRoot = resolve(cwd, stateRoot)
+  const omxDir = dirname(resolvedStateRoot)
+  if (basename(resolvedStateRoot) !== 'state' || basename(omxDir) !== '.omx') return null
+  return dirname(omxDir)
+}
+
+/**
+ * Commit-hygiene reports are leader-facing review artifacts, so they must be
+ * rooted at the leader workspace even when runtime reconciliation is triggered
+ * from a worker worktree or an explicit shared team state root.
+ */
+export function resolveTeamCommitHygieneArtifactCwd(
+  config: Pick<TeamConfig, 'leader_cwd' | 'team_state_root' | 'workers'> | null | undefined,
+  cwd: string,
+): string {
+  const leaderCwd = safePath(config?.leader_cwd)
+  if (leaderCwd) return resolve(cwd, leaderCwd)
+
+  const repoRoot = config?.workers
+    ?.map((worker) => safePath(worker.worktree_repo_root))
+    .find((value): value is string => Boolean(value))
+  if (repoRoot) return resolve(cwd, repoRoot)
+
+  const derivedFromStateRoot = projectRootFromOmxStateRoot(safePath(config?.team_state_root), cwd)
+  if (derivedFromStateRoot) return derivedFromStateRoot
+
+  return resolve(cwd)
 }
 
 function commitHygieneReportsDir(cwd: string): string {

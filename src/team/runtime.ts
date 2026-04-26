@@ -127,6 +127,7 @@ import { readModeState, updateModeState } from '../modes/base.js';
 import {
   appendTeamCommitHygieneEntries,
   buildTeamCommitHygieneContext,
+  resolveTeamCommitHygieneArtifactCwd,
   writeTeamCommitHygieneContext,
   type TeamCommitHygieneArtifactPaths,
   type TeamOperationalCommitEntry,
@@ -698,7 +699,7 @@ async function integrateWorkerCommitsIntoLeader(params: {
   const leaderHeadAtCycleStart = resolveLeaderHead(resolve(config.workers[0]?.worktree_repo_root ?? cwd), cwd);
   const integratedWorkerNames = new Set<string>();
   const commitHygieneEntries: TeamOperationalCommitEntry[] = [];
-  const artifactCwd = config.leader_cwd ?? cwd;
+  const artifactCwd = resolveTeamCommitHygieneArtifactCwd(config, cwd);
 
   // ── Phase A: Auto-commit dirty worktrees ──
   for (const worker of config.workers) {
@@ -3317,7 +3318,7 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
     }
   }
 
-  const artifactCwd = config.leader_cwd ?? cwd;
+  const artifactCwd = resolveTeamCommitHygieneArtifactCwd(config, cwd);
   const ledger = await appendTeamCommitHygieneEntries(sanitized, commitHygieneEntries, artifactCwd)
   const taskView = await listTasks(sanitized, cwd).catch(() => [])
   const commitHygieneContext = buildTeamCommitHygieneContext({

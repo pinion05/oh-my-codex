@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   buildTeamCommitHygieneContext,
   renderTeamCommitHygieneMarkdown,
+  resolveTeamCommitHygieneArtifactCwd,
   TEAM_OPERATIONAL_COMMIT_KINDS,
   TEAM_OPERATIONAL_COMMIT_STATUSES,
   type TeamCommitHygieneLedger,
@@ -87,6 +88,47 @@ describe('team commit hygiene vocabulary', () => {
     assert.ok(
       markdown.indexOf('## Commit Hygiene Vocabulary') < markdown.indexOf('## Runtime Operational Ledger'),
       'vocabulary should explain ledger terms before ledger entries are shown',
+    );
+  });
+});
+
+describe('team commit hygiene artifact root', () => {
+  it('derives leader-facing artifacts from persisted team metadata instead of worker cwd', () => {
+    const leaderCwd = '/tmp/omx-leader';
+    const workerCwd = `${leaderCwd}/.omx/team/demo/worktrees/worker-3`;
+
+    assert.equal(
+      resolveTeamCommitHygieneArtifactCwd({
+        workers: [],
+        leader_cwd: leaderCwd,
+        team_state_root: `${leaderCwd}/.omx/state`,
+      }, workerCwd),
+      leaderCwd,
+    );
+
+    assert.equal(
+      resolveTeamCommitHygieneArtifactCwd({
+        workers: [
+          {
+            name: 'worker-3',
+            index: 3,
+            role: 'executor',
+            assigned_tasks: ['3'],
+            worktree_repo_root: leaderCwd,
+            worktree_path: workerCwd,
+          },
+        ],
+        team_state_root: `${leaderCwd}/.omx/state`,
+      }, workerCwd),
+      leaderCwd,
+    );
+
+    assert.equal(
+      resolveTeamCommitHygieneArtifactCwd({
+        workers: [],
+        team_state_root: `${leaderCwd}/.omx/state`,
+      }, workerCwd),
+      leaderCwd,
     );
   });
 });
