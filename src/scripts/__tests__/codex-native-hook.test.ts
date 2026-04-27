@@ -265,6 +265,24 @@ describe("codex native hook dispatch", () => {
     );
   });
 
+  it("emits parseable no-op JSON stdout for inactive Stop CLI runs", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-cli-stop-noop-json-"));
+    try {
+      const stdout = runNativeHookCli({
+        hook_event_name: "Stop",
+        cwd,
+        session_id: "sess-cli-stop-noop-json",
+        thread_id: "thread-cli-stop-noop-json",
+        turn_id: "turn-cli-stop-noop-json",
+      }, { cwd });
+      const output = parseSingleJsonStdout(stdout);
+
+      assert.deepEqual(output, {});
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("emits exactly one parseable JSON object for active Stop CLI continuation", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-cli-stop-json-"));
     try {

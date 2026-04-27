@@ -2343,6 +2343,8 @@ export async function runCodexNativeHookCli(): Promise<void> {
     const result = await dispatchCodexNativeHook(payload);
     if (result.outputJson) {
       writeNativeHookJsonStdout(result.outputJson);
+    } else if (result.hookEventName === "Stop") {
+      writeNativeHookJsonStdout({});
     }
   } catch (error) {
     if (readHookEventName(payload) !== "Stop") {
