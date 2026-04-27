@@ -27,7 +27,7 @@ import {
  * owned path.
  * Disable entirely with OMX_RUNTIME_BRIDGE=0.
  */
-function runtimeExec(command, stateDir) {
+function runtimeExec(command, stateDir, team) {
   if (process.env.OMX_RUNTIME_BRIDGE === '0') return;
   try {
     const binaryPath = resolveRuntimeBinaryPath();
@@ -39,6 +39,7 @@ function runtimeExec(command, stateDir) {
   } catch (error) {
     recordBridgeFallback({
       stateDir,
+      team,
       operation: 'runtimeExec',
       fallbackTarget: 'js_state_mutation',
       command: safeString(command?.command).trim() || 'unknown',
@@ -592,7 +593,7 @@ async function finalizeClaimedDispatchRequest({
         request.status = 'failed';
         request.failed_at = nowIso;
         request.last_reason = 'unconfirmed_after_max_retries';
-        runtimeExec({ command: 'MarkFailed', request_id: request.request_id, reason: 'unconfirmed_after_max_retries' }, stateDir);
+        runtimeExec({ command: 'MarkFailed', request_id: request.request_id, reason: 'unconfirmed_after_max_retries' }, stateDir, teamName);
         summary.processed += 1;
         summary.failed += 1;
         mutated = true;
@@ -629,9 +630,9 @@ async function finalizeClaimedDispatchRequest({
         request.status = 'notified';
         request.notified_at = nowIso;
         request.last_reason = result.reason;
-        runtimeExec({ command: 'MarkNotified', request_id: request.request_id, channel: 'tmux' }, stateDir);
+        runtimeExec({ command: 'MarkNotified', request_id: request.request_id, channel: 'tmux' }, stateDir, teamName);
         if (request.kind === 'mailbox' && request.message_id) {
-          runtimeExec({ command: 'MarkMailboxNotified', message_id: request.message_id }, stateDir);
+          runtimeExec({ command: 'MarkMailboxNotified', message_id: request.message_id }, stateDir, teamName);
           if (usingLegacyRequests) {
             await updateMailboxNotified(stateDir, teamName, request.to_worker, request.message_id).catch(() => {});
           }
@@ -662,7 +663,7 @@ async function finalizeClaimedDispatchRequest({
       request.status = 'failed';
       request.failed_at = nowIso;
       request.last_reason = result.reason;
-      runtimeExec({ command: 'MarkFailed', request_id: request.request_id, reason: result.reason }, stateDir);
+      runtimeExec({ command: 'MarkFailed', request_id: request.request_id, reason: result.reason }, stateDir, teamName);
       summary.processed += 1;
       summary.failed += 1;
       mutated = true;
@@ -843,7 +844,7 @@ async function injectDispatchRequest(request, config, cwd, stateDir) {
       const wideCap = await runProcess('tmux', verifyWideArgv, 2000);
       // Worker is actively processing (mirrors sync path tmux-session.ts:1292-1294)
       if (paneHasActiveTask(wideCap.stdout)) {
-        runtimeExec({ command: 'MarkDelivered', request_id: request.request_id }, stateDir);
+        runtimeExec({ command: 'MarkDelivered', request_id: request.request_id }, stateDir, request.team_name);
         return {
           ok: true,
           reason: 'tmux_send_keys_confirmed_active_task',
@@ -864,7 +865,7 @@ async function injectDispatchRequest(request, config, cwd, stateDir) {
       const triggerInNarrow = capturedPaneContainsTrigger(narrowCap.stdout, request.trigger_message);
       const triggerNearTail = capturedPaneContainsTriggerNearTail(wideCap.stdout, request.trigger_message);
       if (!triggerInNarrow && !triggerNearTail) {
-        runtimeExec({ command: 'MarkDelivered', request_id: request.request_id }, stateDir);
+        runtimeExec({ command: 'MarkDelivered', request_id: request.request_id }, stateDir, request.team_name);
         return {
           ok: true,
           reason: 'tmux_send_keys_confirmed',

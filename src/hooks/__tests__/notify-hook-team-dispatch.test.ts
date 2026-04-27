@@ -574,6 +574,7 @@ exit 0
         entry.type === 'bridge_fallback' && entry.bridge_operation === 'runtimeExec' && entry.request_id === queued.request.request_id);
       assert.ok(fallback, 'expected structured runtimeExec fallback evidence in dispatch log');
       assert.equal(fallback.command, 'MarkNotified');
+      assert.equal(fallback.team, 'alpha');
       assert.equal(fallback.fallback_target, 'js_state_mutation');
       assert.equal(fallback.counter, 'team_dispatch_bridge_fallback_total');
       assert.match(fallback.reason, /runtime schema drift|failed/);
