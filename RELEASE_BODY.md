@@ -37,6 +37,7 @@ Release readiness evidence is recorded in `docs/qa/release-readiness-0.15.0.md`.
 - No tag, npm publish, or GitHub release has been created by this release-prep change.
 - Existing CLI users can continue with legacy skill delivery; setup now makes plugin-vs-legacy mode explicit and preserves persisted choices.
 - Codex App users should prefer the shipped first-party plugin bundle once the release owner publishes `v0.15.0`.
+- Launching remains detached-tmux by default; operators can bypass that with `omx --direct` or `OMX_LAUNCH_POLICY=direct`, and can also force `tmux`/`detached-tmux` via `OMX_LAUNCH_POLICY`.
 - Existing model overrides remain respected; default generated guidance continues to use `gpt-5.5` for frontier lanes, `gpt-5.4-mini` for standard lanes, and `gpt-5.3-codex-spark` for fast exploration.
 
 ## Contributors

@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 ## [Unreleased]
 
 ### Added
-- **Direct leader launch controls** — `omx --direct` and `OMX_LAUNCH_POLICY=direct|tmux|detached-tmux|auto` now let operators opt out of OMX tmux/HUD management without changing the default detached-tmux startup behavior.
+- **Default detached-tmux launch is explicit, with opt-outs** — `omx --direct` and `OMX_LAUNCH_POLICY=direct|tmux|detached-tmux|auto` are now documented and supported as operator escape hatches, while preserving the default detached-tmux startup behavior.
 
 ## [0.15.0] - 2026-04-25
 
