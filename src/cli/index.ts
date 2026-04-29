@@ -136,6 +136,7 @@ import {
   type NotifyTempContract,
   type ParseNotifyTempContractResult,
 } from "../notifications/temp-contract.js";
+import { execInjectCommand } from "../exec/followup.js";
 
 export function resolveNotifyFallbackWatcherScript(pkgRoot = getPackageRoot()): string {
   return resolveDistScript(pkgRoot, "notify-fallback-watcher.js");
@@ -159,6 +160,8 @@ oh-my-codex (omx) - Multi-agent orchestration for Codex CLI
 Usage:
   omx           Launch Codex CLI (HUD auto-attaches only when already inside tmux)
   omx exec      Run codex exec non-interactively with OMX AGENTS/overlay injection
+  omx exec inject <session-id> --prompt <text>
+                Queue audited follow-up instructions for a running non-interactive exec job
   omx setup     Install skills, prompts, MCP servers, and scope-specific AGENTS.md
                 (user scope prompts for legacy vs plugin skill delivery when needed)
   omx update    Check npm now, update the global install immediately, then refresh setup
@@ -818,7 +821,11 @@ export async function main(args: string[]): Promise<void> {
         await exploreCommand(args.slice(1));
         break;
       case "exec":
-        await execWithOverlay(launchArgs);
+        if (launchArgs[0] === "inject") {
+          await execInjectCommand(launchArgs);
+        } else {
+          await execWithOverlay(launchArgs);
+        }
         break;
       case "sparkshell":
         await sparkshellCommand(args.slice(1));

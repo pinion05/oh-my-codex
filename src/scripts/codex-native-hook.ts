@@ -82,6 +82,7 @@ import {
   evaluateFinalHandoffDocumentRefresh,
   isFinalHandoffDocumentRefreshCandidate,
 } from "../document-refresh/enforcer.js";
+import { buildExecFollowupStopOutput } from "../exec/followup.js";
 
 type CodexHookEventName =
   | "SessionStart"
@@ -1834,6 +1835,8 @@ async function buildStopHookOutput(
   const sessionId = readPayloadSessionId(payload);
   const canonicalSessionId = await resolveInternalSessionIdForPayload(cwd, sessionId);
   const threadId = readPayloadThreadId(payload);
+  const execFollowupOutput = await buildExecFollowupStopOutput(cwd, canonicalSessionId);
+  if (execFollowupOutput) return execFollowupOutput;
   const ralphState = await readActiveRalphState(stateDir, canonicalSessionId);
   if (!ralphState) {
     const autoresearchState = await readActiveAutoresearchState(cwd, canonicalSessionId);

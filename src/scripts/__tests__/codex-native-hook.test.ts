@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -278,6 +278,31 @@ describe("codex native hook dispatch", () => {
       const output = parseSingleJsonStdout(stdout);
 
       assert.deepEqual(output, {});
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("does not crash Stop hook dispatch when the exec follow-up queue is malformed", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-stop-exec-followup-corrupt-"));
+    try {
+      const session = await writeSessionStart(cwd, "sess-exec-followup-corrupt");
+      const queuePath = join(cwd, ".omx", "state", "sessions", session.session_id, "exec-followups.json");
+      await mkdir(dirname(queuePath), { recursive: true });
+      await writeFile(queuePath, '{"version":1,"records":[', "utf-8");
+
+      const result = await dispatchCodexNativeHook({
+        hook_event_name: "Stop",
+        cwd,
+        session_id: session.session_id,
+      });
+
+      assert.equal(result.hookEventName, "Stop");
+      assert.equal(result.outputJson, null);
+      const queueDirEntries = await readdir(dirname(queuePath));
+      assert.ok(queueDirEntries.some((entry) => entry.startsWith("exec-followups.json.corrupt-")));
+      const auditPath = join(cwd, ".omx", "logs", `exec-followups-${new Date().toISOString().slice(0, 10)}.jsonl`);
+      assert.match(await readFile(auditPath, "utf-8"), /exec_followup_queue_corrupt_recovered/);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
