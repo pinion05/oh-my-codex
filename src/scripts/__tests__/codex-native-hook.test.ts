@@ -2420,6 +2420,147 @@ esac
     }
   });
 
+  it("warns on PreToolUse for vague sloppy fallback implementation framing", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-slop-warn-"));
+    try {
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-slop-warn",
+          tool_input: {
+            command: [
+              "cat > src/runtime.ts <<'EOF'",
+              "export function loadRuntime() {",
+              "  // implement a quick hack fallback if it fails",
+              "  return process.env.RUNTIME || 'local';",
+              "}",
+              "EOF",
+            ].join("\n"),
+          },
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "pre-tool-use");
+      assert.equal((result.outputJson as { decision?: string } | null)?.decision, undefined);
+      assert.equal((result.outputJson as { hookSpecificOutput?: { hookEventName?: string } } | null)?.hookSpecificOutput?.hookEventName, "PreToolUse");
+      assert.match(JSON.stringify(result.outputJson), /don't make potential slop/);
+      assert.match(JSON.stringify(result.outputJson), /architect/);
+      assert.match(JSON.stringify(result.outputJson), /environment issue/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("does not warn on PreToolUse for read-only fallback text inspection", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-slop-readonly-"));
+    try {
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-slop-readonly",
+          tool_input: { command: "rg \"quick hack fallback if it fails\" src docs" },
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "pre-tool-use");
+      assert.equal(result.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("warns when a read-only command is chained before sloppy fallback writes", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-slop-chained-write-"));
+    try {
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-slop-chained-write",
+          tool_input: {
+            command: [
+              "rg foo src && cat > src/runtime.ts <<EOF",
+              "export function loadRuntime() {",
+              "  // implement quick hack fallback if it fails",
+              "  return 'local';",
+              "}",
+              "EOF",
+            ].join("\n"),
+          },
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "pre-tool-use");
+      assert.equal((result.outputJson as { decision?: string } | null)?.decision, undefined);
+      assert.equal((result.outputJson as { hookSpecificOutput?: { hookEventName?: string } } | null)?.hookSpecificOutput?.hookEventName, "PreToolUse");
+      assert.match(JSON.stringify(result.outputJson), /don't make potential slop/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("does not warn on PreToolUse for grounded compatibility fallback code", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-slop-grounded-"));
+    try {
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-slop-grounded",
+          tool_input: {
+            command: [
+              "cat > src/compat.ts <<'EOF'",
+              "export function resolveCompatMode() {",
+              "  // temporary fallback because legacy compatibility needs fail-safe startup behavior",
+              "  return 'legacy';",
+              "}",
+              "// Tested: npm test",
+              "EOF",
+            ].join("\n"),
+          },
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "pre-tool-use");
+      assert.equal(result.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps git commit Lore enforcement ahead of sloppy fallback advisory", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-slop-git-priority-"));
+    try {
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          tool_name: "Bash",
+          tool_use_id: "tool-slop-git-priority",
+          tool_input: { command: 'git commit -m "quick hack fallback if it fails"' },
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "pre-tool-use");
+      assert.equal((result.outputJson as { decision?: string } | null)?.decision, "block");
+      assert.match(JSON.stringify(result.outputJson), /Lore protocol/);
+      assert.doesNotMatch(JSON.stringify(result.outputJson), /don't make potential slop/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("blocks PreToolUse git commit with supported response shape when the inline message is not Lore-compliant", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-git-commit-invalid-"));
     try {
