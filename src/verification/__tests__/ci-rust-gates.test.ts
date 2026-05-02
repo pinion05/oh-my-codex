@@ -42,11 +42,10 @@ describe('CI Rust gates', () => {
     assert.match(workflow, /name:\s*Upload prebuilt dist artifact/);
     assert.match(workflow, /name:\s*ci-dist-node20/);
     assert.match(workflow, /^  coverage-team-critical:\s*\n(?:.*\n)*?^\s+needs:\s*\[typecheck, build-dist\]/m);
-    assert.match(workflow, /^  coverage-ts-full:\s*\n(?:.*\n)*?^\s+needs:\s*\[typecheck, build-dist\]/m);
     assert.match(workflow, /^  ralph-persistence-gate:\s*\n(?:.*\n)*?^\s+needs:\s*\[typecheck, build-dist\]/m);
-    assert.match(workflow, /^  build:\s*\n(?:.*\n)*?^\s+needs:\s*\[rustfmt, clippy, lint, typecheck, build-dist, test, ralph-persistence-gate\]/m);
+    assert.match(workflow, /^  build:\s*\n(?:.*\n)*?^\s+needs:\s*\[rustfmt, clippy, lint, typecheck, build-dist\]/m);
 
-    for (const jobName of ['test', 'coverage-team-critical', 'coverage-ts-full', 'ralph-persistence-gate', 'build']) {
+    for (const jobName of ['test', 'coverage-team-critical', 'ralph-persistence-gate', 'build']) {
       assert.match(
         workflow,
         new RegExp(`^  ${jobName}:\\s*\\n(?:.*\\n)*?^\\s+- name:\\s*Download prebuilt dist artifact\\s*\\n\\s+uses:\\s*actions/download-artifact@v8`, 'm'),
@@ -70,21 +69,34 @@ describe('CI Rust gates', () => {
   });
 
 
-  it('uses the current crates/omx-sparkshell manifest for Rust coverage', () => {
-    const workflow = readCiWorkflow();
-
-    assert.match(workflow, /crates\/omx-sparkshell\/Cargo\.toml/);
-    assert.doesNotMatch(workflow, /native\/omx-sparkshell\/Cargo\.toml/);
-  });
-
   it('marks rustfmt and clippy as required in the CI status gate', () => {
     const workflow = readCiWorkflow();
 
-    assert.match(workflow, /needs:\s*\[rustfmt, clippy, lint, typecheck, test, coverage-team-critical, coverage-ts-full, coverage-rust, ralph-persistence-gate, build\]/);
+    assert.match(workflow, /needs:\s*\[rustfmt, clippy, lint, typecheck, test, coverage-team-critical, ralph-persistence-gate, build\]/);
     assert.match(workflow, /needs\.rustfmt\.result/);
     assert.match(workflow, /needs\.clippy\.result/);
     assert.match(workflow, /echo "  rustfmt: \$\{\{ needs\.rustfmt\.result \}\}"/);
     assert.match(workflow, /echo "  clippy: \$\{\{ needs\.clippy\.result \}\}"/);
+  });
+
+
+  it('keeps expensive report-only coverage out of the required CI path', () => {
+    const workflow = readCiWorkflow();
+
+    assert.doesNotMatch(workflow, /^  coverage-ts-full:/m);
+    assert.doesNotMatch(workflow, /^  coverage-rust:/m);
+    assert.doesNotMatch(workflow, /needs\.coverage-ts-full\.result/);
+    assert.doesNotMatch(workflow, /needs\.coverage-rust\.result/);
+  });
+
+  it('runs typecheck once while retaining the Node 22 smoke lane for runtime coverage', () => {
+    const workflow = readCiWorkflow();
+    const typecheckJob = jobBlock(workflow, 'typecheck');
+    const testJob = jobBlock(workflow, 'test');
+
+    assert.doesNotMatch(typecheckJob, /matrix:/);
+    assert.match(typecheckJob, /node-version:\s*20/);
+    assert.match(testJob, /node-version:\s*22\n\s+lane:\s*smoke/);
   });
 
   it('adds timeout-minutes to every CI job so stalled Actions runs fail instead of hanging indefinitely', () => {
@@ -98,8 +110,6 @@ describe('CI Rust gates', () => {
       'build-dist',
       'test',
       'coverage-team-critical',
-      'coverage-ts-full',
-      'coverage-rust',
       'ralph-persistence-gate',
       'build',
       'ci-status',
@@ -112,11 +122,4 @@ describe('CI Rust gates', () => {
     }
   });
 
-  it('uses the current sparkshell crate manifest in the Rust coverage lane', () => {
-    const workflow = readCiWorkflow();
-
-    assert.match(workflow, /cargo llvm-cov --manifest-path crates\/omx-sparkshell\/Cargo\.toml --summary-only/);
-    assert.match(workflow, /cargo llvm-cov --manifest-path crates\/omx-sparkshell\/Cargo\.toml --lcov --output-path coverage\/rust\/omx-sparkshell\.lcov/);
-    assert.doesNotMatch(workflow, /native\/omx-sparkshell\/Cargo\.toml/);
-  });
 });
