@@ -715,7 +715,7 @@ function renderTeamPaneStatus(
   }
 }
 
-function parseTeamArgs(args: string[], cwd: string = process.cwd()): ParsedTeamArgs {
+export function parseTeamArgs(args: string[], cwd: string = process.cwd()): ParsedTeamArgs {
   const tokens = [...args];
   let workerCount = 3;
   let agentType = 'executor';

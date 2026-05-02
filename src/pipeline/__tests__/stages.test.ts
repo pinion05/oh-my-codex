@@ -10,6 +10,7 @@ import { createTeamExecStage, buildTeamInstruction } from '../stages/team-exec.j
 import { createRalphVerifyStage, createRalphStage, buildRalphInstruction } from '../stages/ralph-verify.js';
 import { createCodeReviewStage, buildCodeReviewInstruction } from '../stages/code-review.js';
 import { buildFollowupStaffingPlan } from '../../team/followup-planner.js';
+import { packageRoot } from '../../utils/paths.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -35,6 +36,16 @@ async function cleanup(): Promise<void> {
   if (tempDir && existsSync(tempDir)) {
     await rm(tempDir, { recursive: true, force: true });
   }
+}
+
+function decodeRuntimeCliInstructionPayload(instruction: string): Record<string, unknown> {
+  const match = instruction.match(/--input-json-base64\s+([A-Za-z0-9_-]+)/);
+  assert.ok(match?.[1], 'expected --input-json-base64 payload');
+  return JSON.parse(Buffer.from(match[1], 'base64url').toString('utf-8')) as Record<string, unknown>;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 // ---------------------------------------------------------------------------
@@ -202,10 +213,14 @@ describe('Team Exec Stage', () => {
   it('respects custom worker count and agent type', async () => {
     const stage = createTeamExecStage({ workerCount: 4, agentType: 'architect' });
     const result = await stage.run(makeCtx());
+    const runtimeCliInput = decodeRuntimeCliInstructionPayload(
+      (result.artifacts as Record<string, unknown>).instruction as string,
+    );
 
     const arts = result.artifacts as Record<string, unknown>;
     assert.equal(arts.workerCount, 4);
     assert.equal(arts.agentType, 'architect');
+    assert.equal(runtimeCliInput.agentType, 'architect');
   });
 
   it('includes ralplan artifacts in team task when available', async () => {
@@ -234,7 +249,7 @@ describe('Team Exec Stage', () => {
   });
 
   describe('buildTeamInstruction', () => {
-    it('builds correct CLI instruction', () => {
+    it('builds correct runtime-cli instruction', () => {
       const staffingPlan = buildFollowupStaffingPlan('team', 'implement feature', ['executor', 'test-engineer'], {
         workerCount: 3,
       });
@@ -247,9 +262,31 @@ describe('Team Exec Stage', () => {
         useWorktrees: false,
         cwd: '/tmp/test',
       });
+      const runtimeCliInput = decodeRuntimeCliInstructionPayload(instruction);
 
-      assert.match(instruction, /^omx team 3:executor /);
-      assert.match(instruction, /implement feature/);
+      assert.match(instruction, /runtime-cli\.js/);
+      assert.match(instruction, /--input-json-base64/);
+      assert.match(
+        instruction,
+        new RegExp(escapeRegExp(join(packageRoot(), 'dist', 'team', 'runtime-cli.js'))),
+      );
+      assert.doesNotMatch(
+        instruction,
+        new RegExp(escapeRegExp(join('/tmp/test', 'dist', 'team', 'runtime-cli.js'))),
+      );
+      assert.equal(runtimeCliInput.teamName, 'implement-feature');
+      assert.equal(runtimeCliInput.workerCount, 3);
+      assert.equal(runtimeCliInput.agentType, 'executor');
+      assert.equal('agentTypes' in runtimeCliInput, false);
+      assert.equal(runtimeCliInput.cwd, '/tmp/test');
+      assert.ok(Array.isArray(runtimeCliInput.tasks));
+      assert.equal((runtimeCliInput.tasks as unknown[]).length > 0, true);
+      assert.equal('task' in runtimeCliInput, false);
+      assert.equal('useWorktrees' in runtimeCliInput, false);
+      assert.equal(
+        (runtimeCliInput.decompositionMetadata as Record<string, unknown>).decomposition_source,
+        'legacy_text',
+      );
       assert.match(instruction, /staffing=/);
       assert.match(instruction, /verify=/);
     });
@@ -268,9 +305,104 @@ describe('Team Exec Stage', () => {
         useWorktrees: false,
         cwd: '/tmp',
       });
+      const runtimeCliInput = decodeRuntimeCliInstructionPayload(instruction);
 
-      assert.match(instruction, /^omx team 1:executor /);
+      assert.match(instruction, /runtime-cli\.js/);
+      assert.match(instruction, /--input-json-base64/);
+      assert.equal(runtimeCliInput.workerCount, 1);
+      assert.equal(runtimeCliInput.agentType, 'executor');
       assert.match(instruction, /staffing=/);
+    });
+
+    it('keeps Windows instructions free of POSIX launch comments', () => {
+      const task = `fix "quoted" paths, keep it's 100% safe & support café 运行时`;
+      const staffingPlan = buildFollowupStaffingPlan('team', task, ['executor', 'test-engineer'], {
+        workerCount: 1,
+      });
+      const instruction = buildTeamInstruction({
+        task,
+        workerCount: 1,
+        agentType: 'executor',
+        availableAgentTypes: ['executor', 'test-engineer'],
+        staffingPlan,
+        useWorktrees: false,
+        cwd: 'C:\\repo with spaces',
+      }, { platform: 'win32' });
+      const runtimeCliInput = decodeRuntimeCliInstructionPayload(instruction);
+      const commandPrefix = instruction.split('--input-json-base64')[0] ?? '';
+      const encodedPayload = instruction.match(/--input-json-base64\s+([A-Za-z0-9_-]+)/)?.[1] ?? '';
+
+      assert.match(instruction, /^"[^"]+"\s+"[^"]*runtime-cli\.js"\s+--input-json-base64\s+[A-Za-z0-9_-]+/);
+      assert.equal(commandPrefix.includes("'"), false);
+      assert.doesNotMatch(encodedPayload, /[%&|<>"'\s]/);
+      assert.doesNotMatch(instruction, /# staffing=/);
+      assert.doesNotMatch(instruction, /# verify=/);
+      assert.equal(runtimeCliInput.workerCount, 1);
+      assert.equal(runtimeCliInput.agentType, 'executor');
+      assert.equal('agentTypes' in runtimeCliInput, false);
+      assert.equal(runtimeCliInput.cwd, 'C:\\repo with spaces');
+    });
+
+    it('preserves approved DAG handoff tasks and metadata in the runtime-cli payload', async () => {
+      const plansDir = join(tempDir, '.omx', 'plans');
+      await mkdir(plansDir, { recursive: true });
+      await writeFile(
+        join(plansDir, 'prd-demo.md'),
+        '# Demo\n\nLaunch via omx team 2:executor "Execute approved demo plan"\n',
+      );
+      await writeFile(join(plansDir, 'test-spec-demo.md'), '# Demo Test Spec\n');
+      await writeFile(join(plansDir, 'team-dag-demo.json'), JSON.stringify({
+        schema_version: 1,
+        nodes: [
+          {
+            id: 'impl',
+            lane: 'implementation',
+            role: 'executor',
+            subject: 'Implement runtime',
+            description: 'Change runtime',
+            filePaths: ['src/team/runtime.ts'],
+            requires_code_change: true,
+          },
+          {
+            id: 'verify',
+            lane: 'verification',
+            role: 'test-engineer',
+            subject: 'Verify runtime',
+            description: 'Cover runtime',
+            depends_on: ['impl'],
+          },
+        ],
+        worker_policy: { requested_count: 2, count_source: 'cli-explicit' },
+      }));
+      const staffingPlan = buildFollowupStaffingPlan('team', 'Execute approved demo plan', ['executor', 'test-engineer'], {
+        workerCount: 2,
+      });
+      const instruction = buildTeamInstruction({
+        task: 'Execute approved demo plan',
+        workerCount: 2,
+        agentType: 'executor',
+        availableAgentTypes: ['executor', 'test-engineer'],
+        staffingPlan,
+        useWorktrees: false,
+        cwd: tempDir,
+      });
+      const runtimeCliInput = decodeRuntimeCliInstructionPayload(instruction);
+      const tasks = runtimeCliInput.tasks as Array<Record<string, unknown>>;
+      const decompositionMetadata = runtimeCliInput.decompositionMetadata as Record<string, unknown>;
+
+      assert.equal(runtimeCliInput.teamName, 'execute-approved-demo-plan');
+      assert.equal(runtimeCliInput.workerCount, 2);
+      assert.equal(runtimeCliInput.agentType, 'executor');
+      assert.equal(tasks.length, 2);
+      assert.equal(tasks[0]?.symbolic_id, 'impl');
+      assert.deepEqual(tasks[1]?.symbolic_depends_on, ['impl']);
+      assert.deepEqual(tasks[0]?.filePaths, ['src/team/runtime.ts']);
+      assert.equal(tasks[0]?.lane, 'implementation');
+      assert.equal(decompositionMetadata.decomposition_source, 'dag_sidecar');
+      assert.deepEqual(decompositionMetadata.node_dependencies, {
+        impl: [],
+        verify: ['impl'],
+      });
     });
   });
 });

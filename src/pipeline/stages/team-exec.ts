@@ -6,11 +6,15 @@
  * canonical OMX execution surface.
  */
 
+import { join } from 'node:path';
 import type { PipelineStage, StageContext, StageResult } from '../types.js';
+import { buildRepoAwareTeamExecutionPlan, type TeamDecompositionMetadata } from '../../team/repo-aware-decomposition.js';
+import { buildTeamExecutionPlan, parseTeamArgs } from '../../cli/team.js';
 import {
   buildFollowupStaffingPlan,
   resolveAvailableAgentTypes,
 } from '../../team/followup-planner.js';
+import { packageRoot } from '../../utils/paths.js';
 
 export interface TeamExecStageOptions {
   /** Number of Codex CLI workers to launch. Defaults to 2. */
@@ -24,6 +28,101 @@ export interface TeamExecStageOptions {
 
   /** Additional environment variables for worker launch. */
   extraEnv?: Record<string, string>;
+}
+
+interface BuildTeamInstructionOptions {
+  platform?: NodeJS.Platform;
+}
+
+interface TeamRuntimeCliTaskInput {
+  subject: string;
+  description: string;
+  owner?: string;
+  blocked_by?: string[];
+  depends_on?: string[];
+  symbolic_depends_on?: string[];
+  role?: string;
+  requires_code_change?: boolean;
+  filePaths?: string[];
+  domains?: string[];
+  lane?: string;
+  allocation_reason?: string;
+  symbolic_id?: string;
+}
+
+interface TeamRuntimeCliLaunchInput {
+  teamName: string;
+  workerCount: number;
+  agentType: string;
+  tasks: TeamRuntimeCliTaskInput[];
+  cwd: string;
+  decompositionMetadata?: TeamDecompositionMetadata;
+}
+
+function quotePosixShellArg(value: string): string {
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function quoteWindowsCmdArg(value: string): string {
+  return `"${value.replace(/%/g, '%%').replace(/"/g, '""')}"`;
+}
+
+function quoteShellArg(value: string, platform: NodeJS.Platform): string {
+  return platform === 'win32' ? quoteWindowsCmdArg(value) : quotePosixShellArg(value);
+}
+
+function buildTeamRuntimeCliLaunchInput(descriptor: TeamExecDescriptor): TeamRuntimeCliLaunchInput {
+  const parsed = parseTeamArgs(
+    [`${descriptor.workerCount}:${descriptor.agentType}`, descriptor.task],
+    descriptor.cwd,
+  );
+  const executionPlan = buildRepoAwareTeamExecutionPlan({
+    task: parsed.task,
+    workerCount: parsed.workerCount,
+    agentType: parsed.agentType,
+    explicitAgentType: parsed.explicitAgentType,
+    explicitWorkerCount: parsed.explicitWorkerCount,
+    cwd: descriptor.cwd,
+    buildLegacyPlan: buildTeamExecutionPlan,
+    allowDagHandoff: parsed.allowRepoAwareDagHandoff,
+    approvedRepositoryContextSummary: parsed.approvedRepositoryContextSummary,
+  });
+  return {
+    teamName: parsed.teamName,
+    workerCount: executionPlan.workerCount,
+    agentType: descriptor.agentType,
+    tasks: executionPlan.tasks.map(({
+      subject,
+      description,
+      owner,
+      blocked_by,
+      depends_on,
+      symbolic_depends_on,
+      role,
+      requires_code_change,
+      filePaths,
+      domains,
+      lane,
+      allocation_reason,
+      symbolic_id,
+    }) => ({
+      subject,
+      description,
+      ...(owner ? { owner } : {}),
+      ...(blocked_by?.length ? { blocked_by } : {}),
+      ...(depends_on?.length ? { depends_on } : {}),
+      ...(symbolic_depends_on?.length ? { symbolic_depends_on } : {}),
+      ...(role ? { role } : {}),
+      ...(requires_code_change ? { requires_code_change } : {}),
+      ...(filePaths?.length ? { filePaths } : {}),
+      ...(domains?.length ? { domains } : {}),
+      ...(lane ? { lane } : {}),
+      ...(allocation_reason ? { allocation_reason } : {}),
+      ...(symbolic_id ? { symbolic_id } : {}),
+    })),
+    cwd: descriptor.cwd,
+    ...(executionPlan.metadata ? { decompositionMetadata: executionPlan.metadata } : {}),
+  };
 }
 
 /**
@@ -114,7 +213,17 @@ export interface TeamExecDescriptor {
 /**
  * Build the `omx team` CLI instruction from a descriptor.
  */
-export function buildTeamInstruction(descriptor: TeamExecDescriptor): string {
-  const launchCommand = `omx team ${descriptor.workerCount}:${descriptor.agentType} ${JSON.stringify(descriptor.task)}`;
+export function buildTeamInstruction(
+  descriptor: TeamExecDescriptor,
+  options: BuildTeamInstructionOptions = {},
+): string {
+  const runtimeCliInput = buildTeamRuntimeCliLaunchInput(descriptor);
+  const runtimeCliPath = join(packageRoot(), 'dist', 'team', 'runtime-cli.js');
+  const platform = options.platform ?? process.platform;
+  const encodedInput = Buffer.from(JSON.stringify(runtimeCliInput), 'utf-8').toString('base64url');
+  const launchCommand = `${quoteShellArg(process.execPath, platform)} ${quoteShellArg(runtimeCliPath, platform)} --input-json-base64 ${encodedInput}`;
+  if (platform === 'win32') {
+    return launchCommand;
+  }
   return `${launchCommand} # staffing=${descriptor.staffingPlan.staffingSummary} # verify=${descriptor.staffingPlan.verificationPlan.summary}`;
 }
