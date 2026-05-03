@@ -8,6 +8,8 @@ export const STATE_MODE_SEGMENT_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 const STATE_FILE_SUFFIX = '-state.json';
 const STATE_FILE_NAME_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
 const WORKDIR_ALLOWLIST_ENV = 'OMX_MCP_WORKDIR_ROOTS';
+const OMX_ROOT_ENV = 'OMX_ROOT';
+const OMX_STATE_ROOT_ENV = 'OMX_STATE_ROOT';
 
 export type StateFileScope = 'root' | 'session';
 
@@ -160,11 +162,20 @@ function enforceWorkingDirectoryPolicy(resolvedWorkingDirectory: string): void {
 }
 
 export function getBaseStateDir(workingDirectory?: string): string {
-  if ((workingDirectory == null || workingDirectory === '') && typeof process.env.OMX_TEAM_STATE_ROOT === 'string' && process.env.OMX_TEAM_STATE_ROOT.trim() !== '') {
+  const teamStateRootOverride = process.env.OMX_TEAM_STATE_ROOT?.trim();
+  if (typeof teamStateRootOverride === 'string' && teamStateRootOverride !== '') {
     try {
-      return resolveWorkingDirectoryForState(process.env.OMX_TEAM_STATE_ROOT.trim());
+      return resolveWorkingDirectoryForState(teamStateRootOverride);
     } catch {}
   }
+
+  const omxRootOverride = process.env[OMX_ROOT_ENV]?.trim() || process.env[OMX_STATE_ROOT_ENV]?.trim();
+  if (typeof omxRootOverride === 'string' && omxRootOverride !== '') {
+    try {
+      return join(resolveWorkingDirectoryForState(omxRootOverride), '.omx', 'state');
+    } catch {}
+  }
+
   return join(resolveWorkingDirectoryForState(workingDirectory), '.omx', 'state');
 }
 

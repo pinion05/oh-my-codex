@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { omxStateDir } from '../utils/paths.js';
 import { updateModeState, startMode, readModeState } from '../modes/base.js';
 import { getStatePath, validateSessionId } from '../mcp/state-paths.js';
 import { monitorTeam, resumeTeam, shutdownTeam, startTeam, type TeamRuntime, type TeamSnapshot } from '../team/runtime.js';
@@ -83,7 +84,7 @@ function readPersistedTeamFollowupState(cwd: string): {
   agent_types?: string;
   linkedRalph?: boolean;
 } | null {
-  const path = join(cwd, '.omx', 'state', 'team-state.json');
+  const path = join(omxStateDir(cwd), 'team-state.json');
   if (!existsSync(path)) return null;
   try {
     return JSON.parse(readFileSync(path, 'utf-8')) as {

@@ -112,7 +112,7 @@ import {
 import { synthesizeDelegationPlan } from './delegation-policy.js';
 import { loadRolePrompt } from './role-router.js';
 import { composeRoleInstructionsForRole } from '../agents/native-config.js';
-import { codexPromptsDir } from '../utils/paths.js';
+import { codexPromptsDir, omxStateDir } from '../utils/paths.js';
 import { isTerminalPhase, type TeamPhase, type TerminalPhase } from './orchestrator.js';
 import {
   resolveTeamWorkerLaunchArgs,
@@ -1389,6 +1389,22 @@ interface StartupTimingRecorder {
   flush: () => Promise<void>;
 }
 
+export function teamStartupTimingPath(teamName: string, cwd: string): string {
+  return join(resolveCanonicalTeamStateRoot(cwd), 'team', teamName, 'startup-timing.json');
+}
+
+export function teamRuntimeTeamsRoot(cwd: string): string {
+  return join(resolveCanonicalTeamStateRoot(cwd), 'team');
+}
+
+export function teamRuntimeTeamRoot(teamName: string, cwd: string): string {
+  return join(teamRuntimeTeamsRoot(cwd), teamName);
+}
+
+export function teamRuntimeSessionPath(cwd: string): string {
+  return join(omxStateDir(cwd), 'session.json');
+}
+
 function createStartupTimingRecorder(teamName: string, cwd: string): StartupTimingRecorder {
   const startedAt = performance.now();
   const events: StartupTimingEvent[] = [];
@@ -1402,7 +1418,7 @@ function createStartupTimingRecorder(teamName: string, cwd: string): StartupTimi
       });
     },
     flush: async () => {
-      const timingPath = join(cwd, '.omx', 'state', 'team', teamName, 'startup-timing.json');
+      const timingPath = teamStartupTimingPath(teamName, cwd);
       await writeAtomic(
         timingPath,
         JSON.stringify({ schema_version: STARTUP_TIMING_LOG_VERSION, team_name: teamName, events }, null, 2),
@@ -3725,7 +3741,7 @@ export async function resumeTeam(teamName: string, cwd: string): Promise<TeamRun
 }
 
 async function findActiveTeams(cwd: string, leaderSessionId: string): Promise<string[]> {
-  const root = join(cwd, '.omx', 'state', 'team');
+  const root = teamRuntimeTeamsRoot(cwd);
   if (!existsSync(root)) return [];
   const sessions = new Set(listTeamSessions());
   const entries = await readdir(root, { withFileTypes: true });
@@ -3762,7 +3778,7 @@ async function detectAndCleanStaleTeam(
   workerCount: number,
   confirmFn?: (summary: StaleTeamSummary) => Promise<boolean>,
 ): Promise<void> {
-  const stateDir = join(leaderCwd, '.omx', 'state', 'team', teamName);
+  const stateDir = teamRuntimeTeamRoot(teamName, leaderCwd);
   if (!existsSync(stateDir)) return;
 
   const sessions = new Set(listTeamSessions());
@@ -3816,7 +3832,7 @@ async function resolveLeaderSessionId(cwd: string): Promise<string> {
   const fromEnv = process.env.OMX_SESSION_ID || process.env.CODEX_SESSION_ID || process.env.SESSION_ID;
   if (fromEnv && fromEnv.trim() !== '') return fromEnv.trim();
 
-  const p = join(cwd, '.omx', 'state', 'session.json');
+  const p = teamRuntimeSessionPath(cwd);
   if (!existsSync(p)) return '';
   try {
     const raw = await readFile(p, 'utf-8');
