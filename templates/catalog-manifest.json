@@ -56,7 +56,8 @@
       "name": "autoresearch-goal",
       "category": "execution",
       "status": "active",
-      "core": false
+      "core": false,
+      "internalRequired": false
     },
     {
       "name": "pipeline",
