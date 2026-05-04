@@ -62,4 +62,5 @@ omx ultragoal status --json
 - `create_goal` starts the active objective; it is not a general plan store.
 - `update_goal` is completion-only; pause/resume/budget state is controlled by Codex/user/system, not OMX.
 - Ultragoal owns durable plan and ledger state; Codex goal mode owns active-thread focus and accounting.
+- OMX never edits upstream Codex source such as `../../codex`, never shells out to a hidden `/goal` mutator, and never claims that `omx ultragoal checkpoint` changes Codex's active thread goal. The only Codex goal-mode handoff is explicit: `get_goal`, then `create_goal` when no active goal exists, then `update_goal({status: "complete"})` after the real completion audit passes.
 - A goal is not complete merely because tests pass or a ledger entry exists. The agent must audit the objective against files, commands, tests, PR state, or other concrete evidence.

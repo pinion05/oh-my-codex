@@ -62,6 +62,9 @@ describe('ultragoal artifacts', () => {
       assert.match(instruction, /call create_goal/i);
       assert.match(instruction, /update_goal\(\{status: "complete"\}\)/);
       assert.match(instruction, /Complete first milestone/);
+      assert.doesNotMatch(instruction, /\/goal\b/);
+      assert.doesNotMatch(instruction, /\.\.\/\.\.\/codex/);
+      assert.doesNotMatch(instruction, /codex\s+goal/i);
     });
   });
 
