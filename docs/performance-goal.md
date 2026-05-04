@@ -19,7 +19,7 @@ Each workflow is stored under:
 
 - OMX persists workflow state, evaluator contracts, validation evidence, and ledgers.
 - Codex goal mode owns active-thread focus/accounting.
-- The CLI cannot secretly mutate the interactive Codex goal. `start` prints instructions for the active agent to call `get_goal`, `create_goal`, and later `update_goal({status: "complete"})` safely.
+- The CLI cannot secretly mutate the interactive Codex goal. `start` prints instructions for the active agent to call `get_goal`, call `create_goal` only when appropriate, then run `omx performance-goal complete` before later calling `update_goal({status: "complete"})` safely.
 
 ## Minimal flow
 
@@ -33,6 +33,8 @@ omx performance-goal create \
 omx performance-goal start --slug startup-latency
 omx performance-goal checkpoint --slug startup-latency --status pass --evidence "benchmark and tests passed"
 omx performance-goal complete --slug startup-latency --evidence "final evaluator evidence"
+# after this succeeds and the active Codex goal still owns the objective:
+# update_goal({status: "complete"})
 ```
 
 Completion fails until a passing checkpoint exists.

@@ -312,7 +312,10 @@ describe("worker bootstrap", () => {
     assert.match(inbox, /task IDs 4 instead of creating a duplicate task list/);
     assert.match(inbox, /Task 4: Implement team goal workflow/);
     assert.match(inbox, /active claim owner: worker-4 until 2026-05-04T12:32:13\.456Z/);
-    assert.match(inbox, /\/tmp\/\.omx\/state\/goals\/team\/team-goal\/workers\/worker-4\.json/);
+    assert.match(inbox, /Durable OMX source of truth/);
+    assert.match(inbox, /logical Codex goal handoff only/);
+    assert.doesNotMatch(inbox, /\/tmp\/\.omx\/state\/goals\/team/);
+    assert.doesNotMatch(inbox, /leader-audit\.json/);
     assert.match(inbox, /get_goal/);
     assert.match(inbox, /create_goal.*only when no active goal exists/i);
     assert.match(inbox, /update_goal\(\{status: "complete"\}\).*verification evidence/i);
@@ -558,8 +561,11 @@ describe("worker bootstrap", () => {
     assert.match(inbox, /## Scrum \/ Team Goal Workflow/);
     assert.match(inbox, /Task 9: Finish worker audit/);
     assert.match(inbox, /claim required before work/);
-    assert.match(inbox, /<team_state_root>\/goals\/team\/team-followup-goal\/workers\/worker-2\.json/);
-    assert.match(inbox, /leader-audit\.json/);
+    assert.match(inbox, /Durable OMX source of truth/);
+    assert.match(inbox, /logical Codex goal handoff only/);
+    assert.match(inbox, /omx team api transition-task-status/);
+    assert.doesNotMatch(inbox, /<team_state_root>\/goals\/team/);
+    assert.doesNotMatch(inbox, /leader-audit\.json/);
   });
 
 

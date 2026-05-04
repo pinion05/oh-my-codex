@@ -43,6 +43,37 @@ describe('goal-workflow artifacts', () => {
     });
   });
 
+
+  it('requires a real validation artifact when entering validation_passed', async () => {
+    await withTempRepo(async (cwd) => {
+      await createGoalWorkflowRun(cwd, { workflow: 'scrum-goal', slug: 'strict', objective: 'Strictly validate release.' });
+
+      await assert.rejects(
+        () => transitionGoalWorkflowRun(cwd, 'scrum-goal', 'strict', { status: 'validation_passed' }),
+        /Completion requires a validation artifact/,
+      );
+
+      const placeholder = normalizeGoalWorkflowValidation({
+        status: 'pass',
+        summary: 'TODO placeholder evaluator says pass.',
+        artifactPath: '.omx/goals/scrum-goal/strict/audit.json',
+      });
+      await assert.rejects(
+        () => transitionGoalWorkflowRun(cwd, 'scrum-goal', 'strict', { status: 'validation_passed', validation: placeholder }),
+        /real validation evidence/,
+      );
+
+      const missingArtifact = normalizeGoalWorkflowValidation({
+        status: 'pass',
+        summary: 'Leader audit passed with concrete test output.',
+        artifactPath: '   ',
+      });
+      await assert.rejects(
+        () => transitionGoalWorkflowRun(cwd, 'scrum-goal', 'strict', { status: 'validation_passed', validation: missingArtifact }),
+        /validation artifact path/,
+      );
+    });
+  });
   it('blocks completion until validation passes and records ledger transitions', async () => {
     await withTempRepo(async (cwd) => {
       await createGoalWorkflowRun(cwd, { workflow: 'scrum-goal', slug: 'release', objective: 'Ship release.' });

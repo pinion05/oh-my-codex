@@ -13,7 +13,7 @@ Use this skill when a user asks OMX to optimize performance and wants a goal-ori
 - Codex goal mode owns only the active-thread focus/accounting primitive.
 - Shell commands do **not** mutate hidden Codex goal state. They write artifacts and emit model-facing handoff text.
 - No optimization work may start until an evaluator command and pass/fail contract exist.
-- Do not call `update_goal({status: "complete"})` until the evaluator has a passing checkpoint and a completion audit proves the objective is done.
+- Do not call `update_goal({status: "complete"})` until the evaluator has a passing checkpoint, a completion audit proves the objective is done, and `omx performance-goal complete` has succeeded.
 
 ## CLI
 
@@ -54,7 +54,7 @@ omx performance-goal complete --slug startup-latency --evidence "final evaluator
    - call `get_goal`;
    - call `create_goal` only when no active goal exists and the objective is explicit;
    - work only against the evaluator contract;
-   - call `update_goal({status: "complete"})` only after evaluator pass + completion audit.
+   - call `update_goal({status: "complete"})` only after evaluator pass + completion audit + successful `omx performance-goal complete`.
 3. Optimize in small reversible patches.
 4. Run the evaluator and related regression tests.
 5. Record each pass/fail/blocker with `checkpoint`.

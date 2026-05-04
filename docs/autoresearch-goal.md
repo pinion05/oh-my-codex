@@ -6,7 +6,7 @@
 
 - OMX writes durable artifacts under `.omx/goals/autoresearch/<slug>/`.
 - The CLI does not mutate hidden Codex `/goal` state; it prints a handoff for the active Codex agent.
-- The handoff instructs the agent to call `get_goal`, call `create_goal` only when no active goal exists, and call `update_goal({status: "complete"})` only after completion audit.
+- The handoff instructs the agent to call `get_goal`, call `create_goal` only when no active goal exists, and call `update_goal({status: "complete"})` only after `omx autoresearch-goal complete` records the mission as `complete` and the completion audit passes.
 - Completion requires a professor-critic `verdict=pass` artifact.
 
 ## Commands

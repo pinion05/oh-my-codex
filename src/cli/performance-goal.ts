@@ -40,10 +40,14 @@ function hasFlag(args: readonly string[], flag: string): boolean {
 }
 
 function readValue(args: readonly string[], flag: string): string | undefined {
-  const index = args.indexOf(flag);
-  if (index >= 0) return args[index + 1];
   const prefix = `${flag}=`;
-  return args.find((arg) => arg.startsWith(prefix))?.slice(prefix.length);
+  const inline = args.find((arg) => arg.startsWith(prefix));
+  if (inline !== undefined) return inline.slice(prefix.length);
+  const index = args.indexOf(flag);
+  if (index < 0) return undefined;
+  const value = args[index + 1];
+  if (!value || value.startsWith('--')) throw new PerformanceGoalError(`Missing value for ${flag}.`);
+  return value;
 }
 
 function positionalText(args: readonly string[]): string {

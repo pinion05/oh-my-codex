@@ -9,7 +9,7 @@ export const AUTORESEARCH_GOAL_RUBRIC = 'rubric.md';
 export const AUTORESEARCH_GOAL_LEDGER = 'ledger.jsonl';
 export const AUTORESEARCH_GOAL_COMPLETION = 'completion.json';
 
-export type AutoresearchGoalStatus = 'created' | 'in_progress' | 'passed' | 'failed' | 'blocked';
+export type AutoresearchGoalStatus = 'created' | 'in_progress' | 'passed' | 'failed' | 'blocked' | 'complete';
 export type AutoresearchGoalVerdict = 'pass' | 'fail' | 'blocked';
 
 export interface AutoresearchGoalMission {
@@ -22,6 +22,7 @@ export interface AutoresearchGoalMission {
   status: AutoresearchGoalStatus;
   created_at: string;
   updated_at: string;
+  completed_at?: string;
   mission_path: string;
   rubric_path: string;
   ledger_path: string;
@@ -182,6 +183,9 @@ export async function recordAutoresearchGoalVerdict(
   options: RecordAutoresearchGoalVerdictOptions,
 ): Promise<{ mission: AutoresearchGoalMission; completion: AutoresearchGoalCompletion }> {
   const mission = await readAutoresearchGoal(cwd, options.slug);
+  if (mission.status === 'complete') {
+    throw new AutoresearchGoalError(`Autoresearch goal ${mission.slug} is already complete; create a new goal or explicitly reopen via a future workflow before recording more verdicts.`);
+  }
   const evidence = requireText(options.evidence, '--evidence');
   const now = iso(options.now);
   const completion: AutoresearchGoalCompletion = {
@@ -217,8 +221,13 @@ export async function completeAutoresearchGoal(cwd: string, slug: string, now = 
   if (!completion || !completion.passed || completion.verdict !== 'pass') {
     throw new AutoresearchGoalError(`Autoresearch goal ${mission.slug} cannot complete until professor-critic validation records verdict=pass in ${mission.completion_path}.`);
   }
+  const completedAt = iso(now);
+  mission.status = 'complete';
+  mission.updated_at = completedAt;
+  mission.completed_at = completedAt;
+  await writeMission(cwd, mission);
   await appendLedger(cwd, mission.slug, {
-    ts: iso(now),
+    ts: completedAt,
     event: 'goal_completed',
     slug: mission.slug,
     status: mission.status,

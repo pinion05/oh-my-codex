@@ -29,7 +29,7 @@ export function normalizeGoalWorkflowValidation(input: GoalWorkflowValidationInp
   return {
     status,
     summary: input.summary.trim(),
-    artifactPath: input.artifactPath,
+    artifactPath: input.artifactPath?.trim() || undefined,
     checkedAt: iso(input.checkedAt),
   };
 }
@@ -39,7 +39,7 @@ export function assertGoalWorkflowCanComplete(validation: GoalWorkflowValidation
   if (validation.status !== 'validation_passed') {
     throw new GoalWorkflowValidationError(`Completion requires validation_passed; got ${validation.status}.`);
   }
-  if (!validation.artifactPath) throw new GoalWorkflowValidationError('Completion requires a validation artifact path.');
+  if (!validation.artifactPath?.trim()) throw new GoalWorkflowValidationError('Completion requires a validation artifact path.');
   if (hasPlaceholderEvidence(validation.summary)) {
     throw new GoalWorkflowValidationError('Completion requires real validation evidence, not placeholder evaluator text.');
   }

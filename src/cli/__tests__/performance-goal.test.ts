@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { performanceGoalCommand, PERFORMANCE_GOAL_HELP } from '../performance-goal.js';
+import { HELP } from '../index.js';
 
 async function withCwd<T>(run: (cwd: string) => Promise<T>): Promise<T> {
   const cwd = await mkdtemp(join(tmpdir(), 'omx-performance-goal-cli-'));
@@ -39,6 +40,7 @@ describe('cli/performance-goal', () => {
     assert.match(PERFORMANCE_GOAL_HELP, /evaluator-gated performance optimization/i);
     assert.match(PERFORMANCE_GOAL_HELP, /get_goal\/create_goal\/update_goal/);
     assert.match(PERFORMANCE_GOAL_HELP, /passing checkpoint/i);
+    assert.match(HELP, /omx performance-goal[\s\S]*evaluator-backed performance goals/);
   });
 
   it('creates artifacts and emits a truthful Codex goal handoff', async () => {
@@ -60,11 +62,27 @@ describe('cli/performance-goal', () => {
       assert.match(output, /call create_goal/);
       assert.match(output, /Do not treat this shell command as hidden Codex goal mutation/);
       assert.match(output, /update_goal\(\{status: "complete"\}\)/);
+      assert.ok(output.indexOf('omx performance-goal complete --slug startup-latency') < output.indexOf('update_goal({status: "complete"})'));
       assert.match(output, /npm run perf:startup/);
 
       const state = JSON.parse(await readFile(join(cwd, '.omx/goals/performance/startup-latency/state.json'), 'utf-8')) as { status: string; artifactPaths: { evaluator: string } };
       assert.equal(state.status, 'in_progress');
       assert.equal(state.artifactPaths.evaluator, '.omx/goals/performance/startup-latency/evaluator.md');
+    });
+  });
+
+
+  it('rejects missing values for value-taking flags instead of consuming the next flag', async () => {
+    await withCwd(async () => {
+      const result = await capture(() => performanceGoalCommand([
+        'create',
+        '--objective', 'Reduce latency',
+        '--evaluator-command',
+        '--evaluator-contract', 'PASS when evaluator succeeds.',
+      ]));
+
+      assert.equal(result.exitCode, 1);
+      assert.match(result.stderr.join('\n'), /Missing value for --evaluator-command/);
     });
   });
 
@@ -93,6 +111,10 @@ describe('cli/performance-goal', () => {
       assert.equal(completed.exitCode, undefined);
       const parsed = JSON.parse(completed.stdout.join('\n')) as { state: { status: string } };
       assert.equal(parsed.state.status, 'complete');
+
+      const afterComplete = await capture(() => performanceGoalCommand(['checkpoint', '--slug', 'throughput', '--status', 'fail', '--evidence', 'late regression']));
+      assert.equal(afterComplete.exitCode, 1);
+      assert.match(afterComplete.stderr.join('\n'), /already complete/);
     });
   });
 });

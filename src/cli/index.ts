@@ -189,6 +189,8 @@ Usage:
   omx team      Spawn parallel worker panes in tmux and bootstrap inbox/task state
   omx ralph     Launch Codex with ralph persistence mode active
   omx ultragoal Create, resume, and checkpoint durable multi-goal plans over Codex goal mode
+  omx performance-goal
+                Create, hand off, and gate evaluator-backed performance goals
   omx autoresearch-goal
                 Create, hand off, and gate professor-critic research goals
   omx autoresearch [DEPRECATED] Use $autoresearch; direct CLI launch removed

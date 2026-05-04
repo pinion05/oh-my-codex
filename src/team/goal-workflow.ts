@@ -12,12 +12,6 @@ export interface TeamWorkerGoalInstruction {
     claimOwner?: string;
     claimLeasedUntil?: string;
   }>;
-  artifactPath: string;
-  leaderAuditPath: string;
-}
-
-function normalizeGoalPath(path: string): string {
-  return path.replaceAll("\\", "/");
 }
 
 export function buildTeamWorkerGoalInstruction(
@@ -28,7 +22,7 @@ export function buildTeamWorkerGoalInstruction(
 ): TeamWorkerGoalInstruction | undefined {
   if (tasks.length === 0) return undefined;
 
-  const teamStateRoot = normalizeGoalPath(options.teamStateRoot ?? "<team_state_root>");
+  void options.teamStateRoot;
   const taskIds = tasks.map((task) => task.id);
   const objective = options.objective ??
     `Complete assigned OMX team task${taskIds.length === 1 ? "" : "s"} ${taskIds.join(", ")} for ${teamName} with verified evidence, preserving leader-owned audit.`;
@@ -45,12 +39,6 @@ export function buildTeamWorkerGoalInstruction(
       claimOwner: task.claim?.owner,
       claimLeasedUntil: task.claim?.leased_until,
     })),
-    artifactPath: normalizeGoalPath(
-      `${teamStateRoot}/goals/team/${teamName}/workers/${workerName}.json`,
-    ),
-    leaderAuditPath: normalizeGoalPath(
-      `${teamStateRoot}/goals/team/${teamName}/leader-audit.json`,
-    ),
   };
 }
 
@@ -73,9 +61,9 @@ export function renderTeamWorkerGoalInstruction(
 
 Objective: ${instruction.objective}
 
-Durable OMX goal artifacts:
-- Worker goal artifact: ${instruction.artifactPath}
-- Leader audit artifact: ${instruction.leaderAuditPath}
+Durable OMX source of truth:
+- Existing team task files, task claims, lifecycle events, and leader audit remain the durable artifacts.
+- This section is a logical Codex goal handoff only; it does not create separate per-worker goal JSON or leader-audit artifacts.
 
 Source-of-truth rules:
 - Existing team task files and claim lifecycle remain authoritative; this worker goal must reference task IDs ${instruction.taskIds.join(", ")} instead of creating a duplicate task list.

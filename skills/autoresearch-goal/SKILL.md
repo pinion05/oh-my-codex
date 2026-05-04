@@ -30,7 +30,7 @@ Use this workflow when a research mission should be bound to Codex goal-mode foc
    `omx autoresearch-goal verdict --slug <slug> --verdict <pass|fail|blocked> --evidence "..."`
 5. Completion is blocked until professor-critic validation records `verdict=pass`:
    `omx autoresearch-goal complete --slug <slug>`
-6. Only after the completion audit passes, call `update_goal({status: "complete"})` for the active Codex goal.
+6. Only after `omx autoresearch-goal complete` updates the mission to `complete` and the completion audit passes, call `update_goal({status: "complete"})` for the active Codex goal.
 
 ## Completion gate
 A passing professor-critic artifact is required. Assistant prose, partial tests, or a failed/blocked verdict are not sufficient.

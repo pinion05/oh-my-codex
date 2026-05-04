@@ -68,6 +68,21 @@ describe('cli/autoresearch-goal', () => {
     });
   });
 
+
+  it('rejects missing values for value-taking flags instead of consuming the next flag', async () => {
+    await withCwd(async () => {
+      const result = await capture(() => autoresearchGoalCommand([
+        'create',
+        '--topic', 'Map risk',
+        '--rubric',
+        '--slug', 'map-risk',
+      ]));
+
+      assert.equal(result.exitCode, 1);
+      assert.match(result.stderr.join('\n'), /Missing value for --rubric/);
+    });
+  });
+
   it('blocks completion until a passing professor-critic verdict is recorded', async () => {
     await withCwd(async (cwd) => {
       await capture(() => autoresearchGoalCommand([
@@ -104,6 +119,22 @@ describe('cli/autoresearch-goal', () => {
       const completion = JSON.parse(await readFile(join(cwd, '.omx/goals/autoresearch/research-flaky-tests/completion.json'), 'utf-8')) as { verdict: string; passed: boolean };
       assert.equal(completion.verdict, 'pass');
       assert.equal(completion.passed, true);
+
+      const mission = JSON.parse(await readFile(join(cwd, '.omx/goals/autoresearch/research-flaky-tests/mission.json'), 'utf-8')) as { status: string; completed_at?: string };
+      assert.equal(mission.status, 'complete');
+      assert.match(mission.completed_at ?? '', /^\d{4}-\d{2}-\d{2}T/);
+
+      const status = await capture(() => autoresearchGoalCommand(['status', '--slug', 'research-flaky-tests']));
+      assert.match(status.stdout.join('\n'), /autoresearch-goal: research-flaky-tests \[complete\]/);
+
+      const afterComplete = await capture(() => autoresearchGoalCommand([
+        'verdict',
+        '--slug', 'research-flaky-tests',
+        '--verdict', 'fail',
+        '--evidence', 'late critic rejection',
+      ]));
+      assert.equal(afterComplete.exitCode, 1);
+      assert.match(afterComplete.stderr.join('\n'), /already complete/);
     });
   });
 });

@@ -868,8 +868,6 @@ export function generateTaskAssignmentInbox(
           claimOwner: taskOrId.claim?.owner,
           claimLeasedUntil: taskOrId.claim?.leased_until,
         }],
-        artifactPath: `<team_state_root>/goals/team/${teamName}/workers/${workerName}.json`,
-        leaderAuditPath: `<team_state_root>/goals/team/${teamName}/leader-audit.json`,
       });
   const delegationSection = renderDelegationContracts([task as TeamTask]);
 

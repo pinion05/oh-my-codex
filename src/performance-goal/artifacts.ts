@@ -228,6 +228,9 @@ export async function startPerformanceGoal(cwd: string, slug: string, nowDate = 
 
 export async function checkpointPerformanceGoal(cwd: string, options: CheckpointPerformanceGoalOptions): Promise<PerformanceGoalState> {
   const state = await readPerformanceGoal(cwd, options.slug);
+  if (state.status === 'complete') {
+    throw new PerformanceGoalError(`Performance goal ${state.slug} is already complete; create a new goal or explicitly reopen via a future workflow before recording more checkpoints.`);
+  }
   const evidence = requireText(options.evidence, 'validation evidence');
   const now = iso(options.now);
   state.lastValidation = { status: options.status, evidence, recordedAt: now };
@@ -277,8 +280,9 @@ export function buildPerformanceGoalInstruction(state: PerformanceGoalState): st
     '- Do not treat this shell command as hidden Codex goal mutation; it only wrote OMX artifacts and this handoff.',
     '- Optimize only against the evaluator command/contract below; do not begin optimization without that evaluator.',
     '- Completion is blocked until evaluator evidence passes and is recorded with `omx performance-goal checkpoint --status pass ...`.',
-    '- After evaluator pass and a completion audit prove the objective is complete, call update_goal({status: "complete"}), then run:',
+    '- After evaluator pass and a completion audit prove the objective is complete, first run the durable OMX completion command:',
     `  omx performance-goal complete --slug ${state.slug} --evidence "<passing evaluator/tests/files evidence>"`,
+    '- Only after that command succeeds and the active-goal audit still owns this objective, call update_goal({status: "complete"}) in the Codex thread.',
     '- If the evaluator fails or blocks, checkpoint with --status fail or --status blocked and continue iterating.',
     '',
     'create_goal payload:',

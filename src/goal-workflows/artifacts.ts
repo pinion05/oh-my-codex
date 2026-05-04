@@ -1,11 +1,16 @@
 import { existsSync } from 'node:fs';
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
+import { assertGoalWorkflowCanComplete } from './validation.js';
 
 export const GOAL_WORKFLOWS_DIR = '.omx/goals';
 export const GOAL_WORKFLOW_STATUS = 'status.json';
 export const GOAL_WORKFLOW_LEDGER = 'ledger.jsonl';
 
+// Shared goal-workflow artifacts are a narrow substrate for durable, validator-gated
+// handoffs. Concrete workflows may keep dedicated schemas until explicitly migrated,
+// but any generic completion must pass a real validation summary: non-placeholder
+// evidence plus a non-empty artifact path recorded in the status artifact.
 export type GoalWorkflowStatus = 'pending' | 'in_progress' | 'validation_passed' | 'blocked' | 'failed' | 'complete';
 
 export type GoalWorkflowLedgerEvent =
@@ -177,8 +182,14 @@ function eventForStatus(status: TransitionGoalWorkflowOptions['status']): GoalWo
 
 export async function transitionGoalWorkflowRun(cwd: string, workflow: string, slug: string, options: TransitionGoalWorkflowOptions): Promise<GoalWorkflowRun> {
   const run = await readGoalWorkflowRun(cwd, workflow, slug);
-  if (options.status === 'complete' && run.status !== 'validation_passed') {
-    throw new GoalWorkflowError('Goal workflow completion requires a passing validation artifact first.');
+  if (options.status === 'validation_passed') {
+    assertGoalWorkflowCanComplete(options.validation);
+  }
+  if (options.status === 'complete') {
+    if (run.status !== 'validation_passed') {
+      throw new GoalWorkflowError('Goal workflow completion requires a passing validation artifact first.');
+    }
+    assertGoalWorkflowCanComplete(run.validation);
   }
 
   const now = iso(options.now);

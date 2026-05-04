@@ -188,6 +188,7 @@ const TEAM_ENV_KEYS = [
   "OMX_TEAM_STATE_ROOT",
   "OMX_TEAM_LEADER_CWD",
   "OMX_SESSION_ID",
+  "SESSION_ID",
   "OMX_QUESTION_RETURN_PANE",
   "OMX_LEADER_PANE_ID",
   "TMUX",
@@ -1508,7 +1509,6 @@ describe("codex native hook dispatch", () => {
     }
   });
 
-
   it("includes leader-pane preservation guidance when a pane hint is available", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-deep-interview-pane-hint-"));
     try {
@@ -1647,7 +1647,6 @@ describe("codex native hook dispatch", () => {
       await rm(cwd, { recursive: true, force: true });
     }
   });
-
 
   it("ignores generic wrapper fields so metadata cannot trigger workflow routing or Stop blocking", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-wrapper-metadata-"));
@@ -2738,7 +2737,6 @@ exit 0
     }
   });
 
-
   it("blocks Stop for untracked non-Bash-style sloppy fallback source edits", async () => {
     const cwd = await initTempGitRepo("omx-native-hook-stop-slop-untracked-");
     try {
@@ -2768,7 +2766,6 @@ exit 0
     }
   });
 
-
   it("keeps blocking repeated Stop while sloppy fallback diff remains", async () => {
     const cwd = await initTempGitRepo("omx-native-hook-stop-slop-repeat-");
     try {
@@ -2794,7 +2791,6 @@ exit 0
       await rm(cwd, { recursive: true, force: true });
     }
   });
-
 
   it("blocks Stop for unstaged tracked sloppy fallback source edits", async () => {
     const cwd = await initTempGitRepo("omx-native-hook-stop-slop-unstaged-");
@@ -2913,7 +2909,6 @@ exit 0
     }
   });
 
-
   it("does not block Stop when existing nearby source context grounds a new fallback line", async () => {
     const cwd = await initTempGitRepo("omx-native-hook-stop-slop-existing-ground-");
     try {
@@ -2951,7 +2946,6 @@ exit 0
       await rm(cwd, { recursive: true, force: true });
     }
   });
-
 
   it("does not block Stop for source-adjacent test file fallback wording", async () => {
     const cwd = await initTempGitRepo("omx-native-hook-stop-slop-test-file-");
@@ -5879,7 +5873,6 @@ exit 0
     }
   });
 
-
   it("reads canonical Stop fallback team state from OMX_TEAM_STATE_ROOT when configured", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-team-root-"));
     const sharedRoot = join(cwd, "shared-root");
@@ -7734,7 +7727,6 @@ exit 0
     }
   });
 
-
   it("returns Stop continuation output for native auto-nudge stall prompts", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-auto-nudge-"));
     try {
@@ -8175,6 +8167,35 @@ exit 0
     }
   });
 
+
+  it("ignores generic SESSION_ID for native auto-nudge Stop session scoping", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-auto-nudge-generic-session-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      await mkdir(stateDir, { recursive: true });
+      process.env.SESSION_ID = "generic-shell-session";
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          thread_id: "thread-stop-auto-generic-session",
+          turn_id: "turn-stop-auto-generic-session-1",
+          last_assistant_message: "Keep going and finish the cleanup.",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.equal((result.outputJson as { decision?: string } | null)?.decision, "block");
+      const stopState = JSON.parse(await readFile(join(stateDir, "native-stop-state.json"), "utf-8")) as Record<string, unknown>;
+      const sessions = stopState.sessions as Record<string, unknown>;
+      assert.equal(sessions["generic-shell-session"], undefined);
+      assert.ok(sessions["thread-stop-auto-generic-session"]);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
   it("does not suppress native auto-nudge from stale root deep-interview mode state when the explicit session-scoped mode state is absent", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-auto-nudge-stale-root-mode-"));
     try {
