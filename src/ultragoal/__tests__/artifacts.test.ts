@@ -61,7 +61,11 @@ describe('ultragoal artifacts', () => {
       assert.match(instruction, /call get_goal/i);
       assert.match(instruction, /call create_goal/i);
       assert.match(instruction, /update_goal\(\{status: "complete"\}\)/);
+      assert.match(instruction, /--codex-goal-json/);
       assert.match(instruction, /Complete first milestone/);
+      assert.doesNotMatch(instruction, /\/goal\b/);
+      assert.doesNotMatch(instruction, /\.\.\/\.\.\/codex/);
+      assert.doesNotMatch(instruction, /`codex\s+goal\b/i);
     });
   });
 
@@ -76,7 +80,12 @@ describe('ultragoal artifacts', () => {
       });
 
       const first = await startNextUltragoal(cwd);
-      await checkpointUltragoal(cwd, { goalId: first.goal!.id, status: 'complete', evidence: 'unit tests passed' });
+      await checkpointUltragoal(cwd, {
+        goalId: first.goal!.id,
+        status: 'complete',
+        evidence: 'unit tests passed',
+        codexGoal: { goal: { objective: first.goal!.objective, status: 'complete' } },
+      });
       const second = await startNextUltragoal(cwd);
       assert.equal(second.goal?.id, 'G002-second');
 

@@ -1,6 +1,11 @@
 import { existsSync } from 'node:fs';
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
+import {
+  formatCodexGoalReconciliation,
+  parseCodexGoalSnapshot,
+  reconcileCodexGoalSnapshot,
+} from '../goal-workflows/codex-goal-snapshot.js';
 
 export const ULTRAGOAL_DIR = '.omx/ultragoal';
 export const ULTRAGOAL_BRIEF = 'brief.md';
@@ -250,6 +255,20 @@ export async function checkpointUltragoal(cwd: string, options: CheckpointOption
   const plan = await readUltragoalPlan(cwd);
   const goal = plan.goals.find((candidate) => candidate.id === options.goalId);
   if (!goal) throw new UltragoalError(`Unknown ultragoal id: ${options.goalId}`);
+  if (options.status === 'complete') {
+    const reconciliation = reconcileCodexGoalSnapshot(
+      options.codexGoal === undefined ? null : parseCodexGoalSnapshot(options.codexGoal),
+      {
+        expectedObjective: goal.objective,
+        allowedStatuses: ['complete'],
+        requireSnapshot: true,
+        requireComplete: true,
+      },
+    );
+    if (!reconciliation.ok) {
+      throw new UltragoalError(formatCodexGoalReconciliation(reconciliation));
+    }
+  }
   const now = iso(options.now);
   goal.status = options.status;
   goal.updatedAt = now;
@@ -292,8 +311,8 @@ export function buildCodexGoalInstruction(goal: UltragoalItem, plan: UltragoalPl
     '- First call get_goal. If no active goal exists, call create_goal with the payload below.',
     '- If a different active Codex goal exists, finish/checkpoint that goal before starting this ultragoal.',
     '- Work only this goal until its completion audit passes.',
-    '- After the goal is actually complete, call update_goal({status: "complete"}), then checkpoint the ledger with:',
-    `  omx ultragoal checkpoint --goal-id ${goal.id} --status complete --evidence "<tests/files/PR evidence>"`,
+    '- After the goal is actually complete, call update_goal({status: "complete"}), call get_goal again for a fresh completion snapshot, then checkpoint the ledger with:',
+    `  omx ultragoal checkpoint --goal-id ${goal.id} --status complete --evidence "<tests/files/PR evidence>" --codex-goal-json "<fresh get_goal JSON or path>"`,
     '- If blocked or failed, checkpoint with --status failed and the failure evidence; rerun complete-goals --retry-failed to resume.',
     '',
     'create_goal payload:',

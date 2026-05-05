@@ -67,11 +67,48 @@ describe('cli/ultragoal', () => {
         '--goal-id', 'G001-first-milestone',
         '--status', 'complete',
         '--evidence', 'tests passed',
+        '--codex-goal-json', '{"goal":{"objective":"First milestone","status":"complete"}}',
         '--json',
       ]));
       assert.equal(checkpoint.exitCode, undefined);
       const parsed = JSON.parse(checkpoint.stdout.join('\n')) as { summary: { complete: number } };
       assert.equal(parsed.summary.complete, 1);
+    });
+  });
+
+  it('requires matching complete Codex goal proof before completing a checkpoint', async () => {
+    await withCwd(async () => {
+      await capture(() => ultragoalCommand(['create-goals', '--brief', '- First milestone']));
+      await capture(() => ultragoalCommand(['complete-goals']));
+
+      const missing = await capture(() => ultragoalCommand([
+        'checkpoint',
+        '--goal-id', 'G001-first-milestone',
+        '--status', 'complete',
+        '--evidence', 'tests passed',
+      ]));
+      assert.equal(missing.exitCode, 1);
+      assert.match(missing.stderr.join('\n'), /call get_goal/);
+
+      const incomplete = await capture(() => ultragoalCommand([
+        'checkpoint',
+        '--goal-id', 'G001-first-milestone',
+        '--status', 'complete',
+        '--evidence', 'tests passed',
+        '--codex-goal-json', '{"goal":{"objective":"First milestone","status":"active"}}',
+      ]));
+      assert.equal(incomplete.exitCode, 1);
+      assert.match(incomplete.stderr.join('\n'), /not complete/);
+
+      const mismatch = await capture(() => ultragoalCommand([
+        'checkpoint',
+        '--goal-id', 'G001-first-milestone',
+        '--status', 'complete',
+        '--evidence', 'tests passed',
+        '--codex-goal-json', '{"goal":{"objective":"Different","status":"complete"}}',
+      ]));
+      assert.equal(mismatch.exitCode, 1);
+      assert.match(mismatch.stderr.join('\n'), /objective mismatch/);
     });
   });
 });

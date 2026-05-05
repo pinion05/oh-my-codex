@@ -39,7 +39,7 @@ omx ultragoal complete-goals
 The command marks the next pending goal `in_progress`, appends a ledger entry, and prints a goal-tool handoff. The agent should call `get_goal`, then `create_goal` only if no active Codex goal exists. After the goal is complete, the agent calls `update_goal({status: "complete"})` and checkpoints:
 
 ```sh
-omx ultragoal checkpoint --goal-id G001-example --status complete --evidence "npm test passed; docs updated"
+omx ultragoal checkpoint --goal-id G001-example --status complete --evidence "npm test passed; docs updated" --codex-goal-json ./get-goal.json
 ```
 
 Failure handling:
@@ -53,6 +53,7 @@ Status:
 
 ```sh
 omx ultragoal status
+omx ultragoal status --codex-goal-json ./get-goal.json
 omx ultragoal status --json
 ```
 
@@ -62,4 +63,6 @@ omx ultragoal status --json
 - `create_goal` starts the active objective; it is not a general plan store.
 - `update_goal` is completion-only; pause/resume/budget state is controlled by Codex/user/system, not OMX.
 - Ultragoal owns durable plan and ledger state; Codex goal mode owns active-thread focus and accounting.
+- OMX never edits upstream Codex source such as `../../codex`, never shells out to a hidden `/goal` mutator, and never claims that `omx ultragoal checkpoint` changes Codex's active thread goal. The only Codex goal-mode handoff is explicit: `get_goal`, then `create_goal` when no active goal exists, then `update_goal({status: "complete"})` after the real completion audit passes.
+- Completion checkpoints require a fresh `get_goal` snapshot. Save or pass the JSON from `get_goal` with `--codex-goal-json <json-or-path>`; OMX compares the objective and requires Codex status `complete` before accepting `--status complete`.
 - A goal is not complete merely because tests pass or a ledger entry exists. The agent must audit the objective against files, commands, tests, PR state, or other concrete evidence.

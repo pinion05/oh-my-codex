@@ -1,5 +1,11 @@
 import { readFile } from 'node:fs/promises';
 import {
+  CodexGoalSnapshotError,
+  formatCodexGoalReconciliation,
+  readCodexGoalSnapshotInput,
+  reconcileCodexGoalSnapshot,
+} from '../goal-workflows/codex-goal-snapshot.js';
+import {
   buildCodexGoalInstruction,
   checkpointUltragoal,
   createUltragoalPlan,
@@ -16,7 +22,7 @@ Usage:
   omx ultragoal create-goals [--brief <text> | --brief-file <path> | --from-stdin] [--goal <title::objective>] [--force] [--json]
   omx ultragoal complete-goals [--retry-failed] [--json]
   omx ultragoal checkpoint --goal-id <id> --status <complete|failed> [--evidence <text>] [--codex-goal-json <json-or-path>] [--json]
-  omx ultragoal status [--json]
+  omx ultragoal status [--codex-goal-json <json-or-path>] [--json]
 
 Aliases:
   create -> create-goals, complete|next|start-next -> complete-goals
@@ -97,15 +103,7 @@ function printStatus(plan: Awaited<ReturnType<typeof readUltragoalPlan>>): void 
 
 async function parseCodexGoalJson(raw: string | undefined): Promise<unknown> {
   if (!raw) return undefined;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    try {
-      return JSON.parse(await readFile(raw, 'utf-8'));
-    } catch {
-      return raw;
-    }
-  }
+  return readCodexGoalSnapshotInput(raw, process.cwd());
 }
 
 export async function ultragoalCommand(args: string[]): Promise<void> {
@@ -141,8 +139,21 @@ export async function ultragoalCommand(args: string[]): Promise<void> {
 
     if (command === 'status') {
       const plan = await readUltragoalPlan(cwd);
-      if (json) printJson({ plan, summary: summarizeUltragoalPlan(plan) });
-      else printStatus(plan);
+      const snapshot = await readCodexGoalSnapshotInput(readValue(rest, '--codex-goal-json'), cwd);
+      const activeGoal = plan.goals.find((goal) => goal.id === plan.activeGoalId || goal.status === 'in_progress');
+      const reconciliation = activeGoal
+        ? reconcileCodexGoalSnapshot(snapshot, {
+          expectedObjective: activeGoal.objective,
+          allowedStatuses: ['active', 'complete'],
+          requireSnapshot: false,
+        })
+        : null;
+      if (json) printJson({ plan, summary: summarizeUltragoalPlan(plan), reconciliation });
+      else {
+        printStatus(plan);
+        if (reconciliation && !reconciliation.ok) console.log(`codex goal warning: ${formatCodexGoalReconciliation(reconciliation)}`);
+        else if (reconciliation?.warnings.length) console.log(`codex goal warning: ${formatCodexGoalReconciliation(reconciliation)}`);
+      }
       return;
     }
 
@@ -178,7 +189,7 @@ export async function ultragoalCommand(args: string[]): Promise<void> {
 
     throw new UltragoalError(`Unknown ultragoal command: ${command}\n\n${ULTRAGOAL_HELP}`);
   } catch (error) {
-    if (error instanceof UltragoalError) {
+    if (error instanceof UltragoalError || error instanceof CodexGoalSnapshotError) {
       console.error(`[ultragoal] ${error.message}`);
       process.exitCode = 1;
       return;

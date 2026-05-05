@@ -33,9 +33,9 @@ Loop until `omx ultragoal status` reports all goals complete:
 4. If no active Codex goal exists, call `create_goal` with the printed payload.
 5. Complete that single goal only.
 6. Run a completion audit against the objective and real artifacts/tests.
-7. When complete, call `update_goal({status: "complete"})`.
-8. Checkpoint the durable ledger:
-   `omx ultragoal checkpoint --goal-id <id> --status complete --evidence "<evidence>"`
+7. When complete, call `update_goal({status: "complete"})`, then call `get_goal` again for a fresh completion snapshot.
+8. Checkpoint the durable ledger with that snapshot:
+   `omx ultragoal checkpoint --goal-id <id> --status complete --evidence "<evidence>" --codex-goal-json <get_goal-json-or-path>`
 9. If blocked or failed, checkpoint failure:
    `omx ultragoal checkpoint --goal-id <id> --status failed --evidence "<blocker/evidence>"`
 10. Resume failed goals with `omx ultragoal complete-goals --retry-failed`.
@@ -45,4 +45,5 @@ Loop until `omx ultragoal status` reports all goals complete:
 - The shell command cannot directly invoke Codex interactive `/goal`; it emits a model-facing handoff for the active Codex agent.
 - Never call `create_goal` when `get_goal` reports a different active goal.
 - Never call `update_goal` unless the current goal is actually complete.
+- Completion checkpoints require read-only Codex snapshot reconciliation: pass fresh `get_goal` JSON/path with `--codex-goal-json`; shell commands and hooks must not mutate Codex goal state.
 - Treat `ledger.jsonl` as the durable audit trail; checkpoint after every success or failure.
