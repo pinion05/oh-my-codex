@@ -781,6 +781,95 @@ describe('resolveExploreSparkShellRoute', () => {
 });
 
 describe('exploreCommand', () => {
+  it('answers simple text lookups with the local fast-path before spawning Codex-backed harnesses', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-explore-local-fast-path-'));
+    try {
+      await mkdir(join(wd, 'src'), { recursive: true });
+      await writeFile(join(wd, 'src', 'auth.ts'), 'export const token = "local-only";\n');
+      const harnessStub = join(wd, 'explore-stub.sh');
+      await writeFile(harnessStub, '#!/bin/sh\nprintf harness-should-not-run\n');
+      await chmod(harnessStub, 0o755);
+
+      const result = await runExploreCommandForTest(wd, ['--prompt', 'search for local-only'], {
+        OMX_EXPLORE_BIN: harnessStub,
+      });
+
+      assert.equal(result.exitCode, 0);
+      assert.match(result.stdout, /local fast-path used \(text lookup\)/);
+      assert.match(result.stdout, /src\/auth\.ts:1/);
+      assert.equal(result.stderr, '');
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('answers explicit file-read prompts with bounded file content instead of metadata only', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-explore-local-file-read-'));
+    try {
+      await writeFile(join(wd, 'README.md'), '# Demo README\n\nThis content must be visible.\n');
+      const harnessStub = join(wd, 'explore-stub.sh');
+      await writeFile(harnessStub, '#!/bin/sh\nprintf harness-should-not-run\n');
+      await chmod(harnessStub, 0o755);
+
+      const result = await runExploreCommandForTest(wd, ['--prompt', 'read README.md'], {
+        OMX_EXPLORE_BIN: harnessStub,
+      });
+
+      assert.equal(result.exitCode, 0);
+      assert.match(result.stdout, /local fast-path used \(file lookup\)/);
+      assert.match(result.stdout, /README\.md \(\d+ bytes; showing up to/);
+      assert.match(result.stdout, /# Demo README/);
+      assert.match(result.stdout, /This content must be visible\./);
+      assert.doesNotMatch(result.stdout.trim(), /^.*README\.md \(\d+ bytes\)$/);
+      assert.equal(result.stderr, '');
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('marks explicit file-read fast-path output when file content is truncated', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-explore-local-file-truncated-'));
+    try {
+      await writeFile(join(wd, 'README.md'), `# Demo README\n${'x'.repeat(20_000)}\n`);
+      const harnessStub = join(wd, 'explore-stub.sh');
+      await writeFile(harnessStub, '#!/bin/sh\nprintf harness-should-not-run\n');
+      await chmod(harnessStub, 0o755);
+
+      const result = await runExploreCommandForTest(wd, ['--prompt', 'show README.md'], {
+        OMX_EXPLORE_BIN: harnessStub,
+      });
+
+      assert.equal(result.exitCode, 0);
+      assert.match(result.stdout, /# Demo README/);
+      assert.match(result.stdout, /\[truncated: file exceeds local fast-path limit/);
+      assert.equal(result.stderr, '');
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('times out Codex-backed harness process trees with an explicit runaway error', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-explore-timeout-'));
+    try {
+      const harnessStub = join(wd, 'explore-stub.sh');
+      await writeFile(
+        harnessStub,
+        '#!/bin/sh\nprintf "started\\n"\nsleep 5\n',
+      );
+      await chmod(harnessStub, 0o755);
+
+      await assert.rejects(
+        () => runExploreCommandForTest(wd, ['--prompt', 'map the runtime timeout behavior'], {
+          OMX_EXPLORE_BIN: harnessStub,
+          OMX_EXPLORE_TIMEOUT_MS: '50',
+        }),
+        /harness timed out after 50ms; terminated the process tree/,
+      );
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
   it('routes qualifying read-only shell commands through sparkshell instead of the direct harness', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-explore-sparkshell-route-'));
     try {
