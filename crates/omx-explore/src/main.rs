@@ -2449,20 +2449,26 @@ printf 'fake codex started
         let _process_guard = process_tree_lock();
         let root = temp_allowlist_dir().expect("temp root");
         let term_file = root.path.join("grandchild.term");
+        let ready_file = root.path.join("grandchild.ready");
         let script = root.path.join("spawn-grandchild.sh");
         write_executable(
             &script,
             &format!(
                 r#"#!/bin/sh
-(trap 'printf term > {}; exit 0' TERM; sleep 30) &
+(trap 'printf term > {}; exit 0' TERM; printf ready > {}; sleep 30) &
+while [ ! -f {} ]; do
+  sleep 0.01
+done
 sleep 30
 "#,
-                shell_quote(&term_file.display().to_string())
+                shell_quote(&term_file.display().to_string()),
+                shell_quote(&ready_file.display().to_string()),
+                shell_quote(&ready_file.display().to_string()),
             ),
         )
         .expect("write script");
 
-        let result = run_command_with_timeout(Command::new(&script), Duration::from_millis(100))
+        let result = run_command_with_timeout(Command::new(&script), Duration::from_millis(500))
             .expect("run with timeout");
         let TimedCommandOutput::TimedOut { .. } = result else {
             panic!("expected timeout");
