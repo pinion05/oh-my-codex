@@ -39,6 +39,7 @@ import {
   resolveProjectLocalCodexHomeForLaunch,
   shouldAutoIsolateMadmaxLaunch,
   createMadmaxIsolatedRoot,
+  resolveOmxRootForLaunch,
   resolveDisposableWorktreeOmxRootForLaunch,
   prepareCodexHomeForLaunch,
   runtimeCodexHomePath,
@@ -137,6 +138,59 @@ describe("madmax state isolation", () => {
   });
 });
 
+describe("resolveOmxRootForLaunch", () => {
+  it("preserves POSIX absolute OMX_ROOT", () => {
+    assert.equal(
+      resolveOmxRootForLaunch("/repo", { OMX_ROOT: "/var/tmp/omx" }),
+      "/var/tmp/omx",
+    );
+  });
+
+  it("preserves Windows drive-letter absolute OMX_ROOT", () => {
+    assert.equal(
+      resolveOmxRootForLaunch("/repo", { OMX_ROOT: "C:\\Users\\me\\omx" }),
+      "C:\\Users\\me\\omx",
+    );
+  });
+
+  it("preserves Windows drive-letter absolute OMX_STATE_ROOT", () => {
+    assert.equal(
+      resolveOmxRootForLaunch("/repo", { OMX_STATE_ROOT: "D:\\omx-state" }),
+      "D:\\omx-state",
+    );
+  });
+
+  it("preserves UNC absolute OMX_ROOT", () => {
+    assert.equal(
+      resolveOmxRootForLaunch("/repo", { OMX_ROOT: "\\\\server\\share\\omx" }),
+      "\\\\server\\share\\omx",
+    );
+  });
+
+  it("joins relative OMX_ROOT to cwd", () => {
+    assert.equal(
+      resolveOmxRootForLaunch("/repo", { OMX_ROOT: "relative/omx" }),
+      join("/repo", "relative/omx"),
+    );
+  });
+
+  it("returns undefined for blank OMX_ROOT and OMX_STATE_ROOT", () => {
+    assert.equal(
+      resolveOmxRootForLaunch("/repo", { OMX_ROOT: "  ", OMX_STATE_ROOT: "" }),
+      undefined,
+    );
+  });
+
+  it("prefers OMX_ROOT over OMX_STATE_ROOT", () => {
+    assert.equal(
+      resolveOmxRootForLaunch("/repo", {
+        OMX_ROOT: "C:\\Users\\me\\root",
+        OMX_STATE_ROOT: "/state-root",
+      }),
+      "C:\\Users\\me\\root",
+    );
+  });
+});
 
 describe("disposable worktree state root resolution", () => {
   it("uses the source repo root for launch worktrees when no explicit root is set", () => {

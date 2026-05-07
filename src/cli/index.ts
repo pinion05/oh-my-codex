@@ -4,7 +4,7 @@
  */
 
 import { execFileSync, spawn } from "child_process";
-import { basename, dirname, join } from "path";
+import { basename, dirname, join, posix, win32 } from "path";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
 import { copyFile, cp, lstat, mkdir, readdir, rm, symlink } from "fs/promises";
 import { constants as osConstants, homedir } from "os";
@@ -991,13 +991,17 @@ export function buildHudPaneCleanupTargets(
   return [...targets];
 }
 
+function isCrossPlatformAbsolutePath(raw: string): boolean {
+  return posix.isAbsolute(raw) || win32.isAbsolute(raw);
+}
+
 export function resolveOmxRootForLaunch(
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
   const raw = env.OMX_ROOT || env.OMX_STATE_ROOT;
   if (typeof raw !== "string" || raw.trim() === "") return undefined;
-  return raw.startsWith("/") ? raw : join(cwd, raw);
+  return isCrossPlatformAbsolutePath(raw) ? raw : join(cwd, raw);
 }
 
 function hasExplicitOmxRootEnv(env: NodeJS.ProcessEnv = process.env): boolean {
