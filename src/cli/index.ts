@@ -601,9 +601,12 @@ function resolveTmuxExecutableForLaunch(): string {
 
 export interface PreparedCodexHomeForLaunch {
   codexHomeOverride?: string;
+  sqliteHomeOverride?: string;
   projectLocalCodexHomeForCleanup?: string;
   runtimeCodexHomeForCleanup?: string;
 }
+
+export const CODEX_SQLITE_HOME_ENV = "CODEX_SQLITE_HOME";
 
 export function runtimeCodexHomePath(
   cwd: string,
@@ -625,6 +628,10 @@ async function linkOrCopyCodexHomeEntry(source: string, destination: string): Pr
   }
 }
 
+function isCodexSqliteArtifact(entryName: string): boolean {
+  return /^(?:state|logs)_\d+\.sqlite(?:-(?:shm|wal))?$/.test(entryName);
+}
+
 /**
  * Project-scope setup keeps durable Codex config under <repo>/.codex, but the
  * Codex TUI also stores model-availability NUX counters in CODEX_HOME/config.toml.
@@ -643,6 +650,7 @@ export async function prepareRuntimeCodexHomeForProjectLaunch(
   if (!existsSync(projectCodexHome)) return runtimeCodexHome;
 
   for (const entry of await readdir(projectCodexHome, { withFileTypes: true })) {
+    if (isCodexSqliteArtifact(entry.name)) continue;
     const source = join(projectCodexHome, entry.name);
     const destination = join(runtimeCodexHome, entry.name);
     if (entry.name === "config.toml") {
@@ -653,6 +661,15 @@ export async function prepareRuntimeCodexHomeForProjectLaunch(
   }
 
   return runtimeCodexHome;
+}
+
+function resolveProjectSqliteHomeForLaunch(
+  projectCodexHome: string,
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  const configured = env[CODEX_SQLITE_HOME_ENV];
+  if (typeof configured === "string" && configured.trim() !== "") return undefined;
+  return projectCodexHome;
 }
 
 export async function prepareCodexHomeForLaunch(
@@ -669,6 +686,7 @@ export async function prepareCodexHomeForLaunch(
     );
     return {
       codexHomeOverride: runtimeCodexHome,
+      sqliteHomeOverride: resolveProjectSqliteHomeForLaunch(projectLocalCodexHomeForCleanup, env),
       projectLocalCodexHomeForCleanup,
       runtimeCodexHomeForCleanup: runtimeCodexHome,
     };
@@ -1471,6 +1489,7 @@ export async function launchWithHud(args: string[]): Promise<void> {
 
   const preparedCodexHome = await prepareCodexHomeForLaunch(launchCwd, sessionId, process.env);
   const codexHomeOverride = preparedCodexHome.codexHomeOverride;
+  const sqliteHomeOverride = preparedCodexHome.sqliteHomeOverride;
   const projectLocalCodexHomeForCleanup = preparedCodexHome.projectLocalCodexHomeForCleanup;
 
   // ── Phase 1: preLaunch ──────────────────────────────────────────────────
@@ -1495,6 +1514,7 @@ export async function launchWithHud(args: string[]): Promise<void> {
       sessionId,
       workerSparkModel,
       codexHomeOverride,
+      sqliteHomeOverride,
       notifyTempContractRaw,
       effectiveExplicitLaunchPolicy,
       projectLocalCodexHomeForCleanup,
@@ -1580,6 +1600,7 @@ export async function execWithOverlay(args: string[]): Promise<void> {
 
   const preparedCodexHome = await prepareCodexHomeForLaunch(launchCwd, sessionId, process.env);
   const codexHomeOverride = preparedCodexHome.codexHomeOverride;
+  const sqliteHomeOverride = preparedCodexHome.sqliteHomeOverride;
   const projectLocalCodexHomeForCleanup = preparedCodexHome.projectLocalCodexHomeForCleanup;
 
   try {
@@ -1604,6 +1625,7 @@ export async function execWithOverlay(args: string[]): Promise<void> {
     const codexEnvBase = {
       ...process.env,
       ...(codexHomeOverride ? { CODEX_HOME: codexHomeOverride } : {}),
+      ...(sqliteHomeOverride ? { [CODEX_SQLITE_HOME_ENV]: sqliteHomeOverride } : {}),
       ...(omxRootOverride ? { OMX_ROOT: omxRootOverride } : {}),
     };
     const codexEnv = notifyTempContractRaw
@@ -2513,6 +2535,7 @@ export function buildDetachedSessionBootstrapSteps(
   runtimeCodexHomeForCleanup?: string,
   omxRootOverride?: string,
   env: NodeJS.ProcessEnv = process.env,
+  sqliteHomeOverride?: string,
 ): DetachedSessionTmuxStep[] {
   const detachedLeaderCmd = nativeWindows
     ? "powershell.exe"
@@ -2541,6 +2564,7 @@ export function buildDetachedSessionBootstrapSteps(
     ...(sessionId ? ["-e", `OMX_SESSION_ID=${sessionId}`] : []),
     ...(sessionId ? ["-e", `${OMX_TMUX_HUD_OWNER_ENV}=1`] : []),
     ...(codexHomeOverride ? ["-e", `CODEX_HOME=${codexHomeOverride}`] : []),
+    ...(sqliteHomeOverride ? ["-e", `${CODEX_SQLITE_HOME_ENV}=${sqliteHomeOverride}`] : []),
     ...(omxRootOverride ? ["-e", `OMX_ROOT=${omxRootOverride}`] : []),
     ...(env.OMX_STATE_ROOT ? ["-e", `OMX_STATE_ROOT=${env.OMX_STATE_ROOT}`] : []),
     ...(env.OMXBOX_ACTIVE ? ["-e", `OMXBOX_ACTIVE=${env.OMXBOX_ACTIVE}`] : []),
@@ -3135,6 +3159,7 @@ function runCodex(
   sessionId: string,
   workerDefaultModel?: string,
   codexHomeOverride?: string,
+  sqliteHomeOverride?: string,
   notifyTempContractRaw?: string | null,
   explicitLaunchPolicy?: CodexLaunchPolicy,
   projectLocalCodexHomeForCleanup?: string,
@@ -3165,6 +3190,7 @@ function runCodex(
   const codexBaseEnv = {
     ...process.env,
     ...(codexHomeOverride ? { CODEX_HOME: codexHomeOverride } : {}),
+    ...(sqliteHomeOverride ? { [CODEX_SQLITE_HOME_ENV]: sqliteHomeOverride } : {}),
     ...(omxRootOverride ? { OMX_ROOT: omxRootOverride } : {}),
   };
   const codexEnvWithSession = {
@@ -3283,6 +3309,7 @@ function runCodex(
         runtimeCodexHomeForCleanup,
         omxRootOverride,
         process.env,
+        sqliteHomeOverride,
       );
       for (const step of bootstrapSteps) {
         const output = execTmuxFileSync(step.args, {
