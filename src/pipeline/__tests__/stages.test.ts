@@ -451,6 +451,7 @@ describe('Team Exec Stage', () => {
       '# Plan-only plan\n\nLaunch via omx team 5:debugger "Execute plan-only team handoff"\n',
     );
     await writeFile(join(plansDir, 'test-spec-plan-only.md'), '# Plan-only test spec\n');
+    await writeFile(join(plansDir, 'repo-context-plan-only.md'), 'Plan-only repo summary should not reach workers.\n');
 
     const previousCwd = process.cwd();
     try {
@@ -475,6 +476,43 @@ describe('Team Exec Stage', () => {
       assert.equal(descriptor.approvedExecution, null);
       assert.equal(runtimeCliInput.task, 'Execute plan-only team handoff');
       assert.equal(runtimeCliInput.approvedExecution, null);
+      assert.equal(
+        (runtimeCliInput.decompositionMetadata as Record<string, unknown> | undefined)?.approved_context_summary,
+        undefined,
+      );
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
+
+  it('blocks team-exec when the selected approved handoff is missing its baseline', async () => {
+    const plansDir = join(tempDir, '.omx', 'plans');
+    await mkdir(plansDir, { recursive: true });
+    await writeFile(
+      join(plansDir, 'prd-issue-missing-baseline.md'),
+      '# Missing-baseline plan\n\nLaunch via omx team 5:debugger "Execute missing-baseline team handoff"\n',
+    );
+
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tmpdir());
+      const stage = createTeamExecStage();
+      const result = await stage.run(makeCtx({
+        task: 'original request task',
+        artifacts: {
+          ralplan: {
+            task: 'original request task',
+            stage: 'ralplan',
+            latestPlanPath: join('.omx', 'plans', 'prd-issue-missing-baseline.md'),
+          },
+        },
+      }));
+      assert.equal(result.status, 'failed');
+      assert.match(
+        result.error ?? '',
+        /team_exec_approved_handoff_nonready:missing-baseline:.*prd-issue-missing-baseline\.md/,
+      );
+      assert.deepEqual(result.artifacts, {});
     } finally {
       process.chdir(previousCwd);
     }
