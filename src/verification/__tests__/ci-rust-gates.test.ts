@@ -10,9 +10,14 @@ function readCiWorkflow(): string {
 }
 
 function jobBlock(workflow: string, jobName: string): string {
-  const match = workflow.match(new RegExp(`^  ${jobName}:\\n([\\s\\S]*?)(?=^  [a-z0-9-]+:\\n|\\Z)`, 'm'));
-  assert.ok(match?.[0], `missing CI job block for ${jobName}`);
-  return match[0];
+  const startMatch = workflow.match(new RegExp(`(^|\\n)  ${jobName}:\\n`));
+  assert.ok(startMatch?.index !== undefined, `missing CI job block for ${jobName}`);
+
+  const start = startMatch.index + startMatch[1].length;
+  const afterJobHeader = start + `  ${jobName}:\n`.length;
+  const nextJobOffset = workflow.slice(afterJobHeader).search(/\n  [a-z0-9-]+:\n/);
+  const end = nextJobOffset === -1 ? workflow.length : afterJobHeader + nextJobOffset;
+  return workflow.slice(start, end);
 }
 
 describe('CI Rust gates', () => {
@@ -98,16 +103,34 @@ describe('CI Rust gates', () => {
   });
 
 
-  it('marks Rust formatting, Clippy, and tests as required in the CI status gate', () => {
+  it('marks every required CI lane as required and reported in the CI status gate', () => {
     const workflow = readCiWorkflow();
+    const ciStatusJob = jobBlock(workflow, 'ci-status');
+    const requiredJobs = [
+      'rustfmt',
+      'clippy',
+      'rust-tests',
+      'lint',
+      'typecheck',
+      'test',
+      'coverage-team-critical',
+      'ralph-persistence-gate',
+      'build',
+    ];
 
-    assert.match(workflow, /needs:\s*\[rustfmt, clippy, rust-tests, lint, typecheck, test, coverage-team-critical, ralph-persistence-gate, build\]/);
-    assert.match(workflow, /needs\.rustfmt\.result/);
-    assert.match(workflow, /needs\.clippy\.result/);
-    assert.match(workflow, /needs\.rust-tests\.result/);
-    assert.match(workflow, /echo "  rustfmt: \$\{\{ needs\.rustfmt\.result \}\}"/);
-    assert.match(workflow, /echo "  clippy: \$\{\{ needs\.clippy\.result \}\}"/);
-    assert.match(workflow, /echo "  rust-tests: \$\{\{ needs\.rust-tests\.result \}\}"/);
+    assert.match(
+      ciStatusJob,
+      /needs:\s*\[rustfmt, clippy, rust-tests, lint, typecheck, test, coverage-team-critical, ralph-persistence-gate, build\]/,
+    );
+
+    for (const jobName of requiredJobs) {
+      assert.match(ciStatusJob, new RegExp(`needs\\.${jobName}\\.result`), `${jobName} result should be checked`);
+      assert.match(
+        ciStatusJob,
+        new RegExp(`echo \"  ${jobName}: \\$\\{\\{ needs\\.${jobName}\\.result \\}\\}\"`),
+        `${jobName} result should be reported`,
+      );
+    }
   });
 
 
