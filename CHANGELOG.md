@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.16.2] - 2026-05-08
+
+### Fixed
+
+- Restored generated Codex hook setup config to `[features].codex_hooks = true`, matching current Codex lifecycle-hook docs.
+- Added plugin-mode hook trust-state generation for setup-owned `codex-native-hook.js` wrappers while preserving user hook state.
+- Updated setup docs/tests/plugin mirrors for the supported `codex_hooks` feature flag.
+
 ## [0.16.1] - 2026-05-08
 
 Patch release focused on post-`0.16.0` reliability and release-safety hardening: bounded explore execution, safer local explore fast-path reads, clean CI dependency-install proof, session-scoped runtime authority, approved Team handoff repair behavior, context-pack status visibility, deep-interview flow clarity, and launch/runtime fixes.

@@ -437,7 +437,7 @@ function upsertFeatureFlags(config: string): string {
       "[features]",
       "multi_agent = true",
       "child_agents_md = true",
-      "hooks = true",
+      "codex_hooks = true",
       "goals = true",
       "",
     ].join("\n");
@@ -498,16 +498,16 @@ function upsertFeatureFlags(config: string): string {
   }
 
   if (hooksIdx >= 0) {
-    lines[hooksIdx] = "hooks = true";
+    lines[hooksIdx] = "codex_hooks = true";
     if (legacyCodexHooksIdx >= 0) {
       lines.splice(legacyCodexHooksIdx, 1);
       sectionEnd -= 1;
       if (goalsIdx > legacyCodexHooksIdx) goalsIdx -= 1;
     }
   } else if (legacyCodexHooksIdx >= 0) {
-    lines[legacyCodexHooksIdx] = "hooks = true";
+    lines[legacyCodexHooksIdx] = "codex_hooks = true";
   } else {
-    lines.splice(sectionEnd, 0, "hooks = true");
+    lines.splice(sectionEnd, 0, "codex_hooks = true");
     sectionEnd += 1;
   }
 
@@ -520,6 +520,36 @@ function upsertFeatureFlags(config: string): string {
   return lines.join("\n");
 }
 
+const OMX_HOOK_TRUST_START_MARKER = "# OMX-owned Codex hook trust state";
+const OMX_HOOK_TRUST_END_MARKER = "# End OMX-owned Codex hook trust state";
+
+export function stripManagedCodexHookTrustState(config: string): string {
+  const blockPattern = new RegExp(
+    `\n?${OMX_HOOK_TRUST_START_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\n[\\s\\S]*?${OMX_HOOK_TRUST_END_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\n?`,
+    "g",
+  );
+  return config.replace(blockPattern, "\n").replace(/\n{3,}/g, "\n\n").trimEnd();
+}
+
+export function upsertManagedCodexHookTrustState(
+  config: string,
+  pkgRoot: string,
+  codexHooksFile: string | undefined,
+): string {
+  const stripped = stripManagedCodexHookTrustState(config);
+  const hookTrustToml = buildManagedCodexHookTrustToml(codexHooksFile, pkgRoot);
+  if (!hookTrustToml) return `${stripped}\n`;
+  return [
+    stripped,
+    "",
+    OMX_HOOK_TRUST_START_MARKER,
+    "# Trusts only setup-managed codex-native-hook.js wrappers.",
+    hookTrustToml,
+    OMX_HOOK_TRUST_END_MARKER,
+    "",
+  ].filter((line, index) => index !== 0 || line.length > 0).join("\n");
+}
+
 export function upsertPluginModeRuntimeFeatureFlags(config: string): string {
   const lines = config.split(/\r?\n/);
   const featuresStart = lines.findIndex((line) =>
@@ -530,7 +560,7 @@ export function upsertPluginModeRuntimeFeatureFlags(config: string): string {
     const base = config.trimEnd();
     const featureBlock = [
       "[features]",
-      "hooks = true",
+      "codex_hooks = true",
       "goals = true",
       "",
     ].join("\n");
@@ -571,16 +601,16 @@ export function upsertPluginModeRuntimeFeatureFlags(config: string): string {
   }
 
   if (hooksIdx >= 0) {
-    lines[hooksIdx] = "hooks = true";
+    lines[hooksIdx] = "codex_hooks = true";
     if (legacyCodexHooksIdx >= 0) {
       lines.splice(legacyCodexHooksIdx, 1);
       sectionEnd--;
       if (goalsIdx > legacyCodexHooksIdx) goalsIdx--;
     }
   } else if (legacyCodexHooksIdx >= 0) {
-    lines[legacyCodexHooksIdx] = "hooks = true";
+    lines[legacyCodexHooksIdx] = "codex_hooks = true";
   } else {
-    lines.splice(sectionEnd, 0, "hooks = true");
+    lines.splice(sectionEnd, 0, "codex_hooks = true");
     sectionEnd++;
   }
 
@@ -1444,6 +1474,7 @@ function getOmxTablesBlock(
     lines.push("# OMX-owned Codex hook trust state");
     lines.push("# Trusts only setup-managed codex-native-hook.js wrappers.");
     lines.push(hookTrustToml);
+    lines.push("# End OMX-owned Codex hook trust state");
   }
 
   lines.push(

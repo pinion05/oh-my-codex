@@ -40,6 +40,8 @@ import {
 	stripOmxFeatureFlags,
 	stripOmxSeededBehavioralDefaults,
 	upsertPluginModeRuntimeFeatureFlags,
+	upsertManagedCodexHookTrustState,
+	stripManagedCodexHookTrustState,
 	OMX_PLUGIN_DEVELOPER_INSTRUCTIONS,
 } from "../config/generator.js";
 import { mergeManagedCodexHooksConfig } from "../config/codex-hooks.js";
@@ -1408,8 +1410,11 @@ async function applyPluginModeHooksConfig(
 	const existingConfig = existsSync(configPath)
 		? await readFile(configPath, "utf-8")
 		: "";
-	const nextConfig =
-		upsertPluginModeRuntimeFeatureFlags(existingConfig).trimEnd() + "\n";
+	const nextConfig = upsertManagedCodexHookTrustState(
+		upsertPluginModeRuntimeFeatureFlags(stripManagedCodexHookTrustState(existingConfig)),
+		pkgRoot,
+		hooksPath,
+	);
 	if (nextConfig !== existingConfig) {
 		if (
 			await ensureBackup(
@@ -1436,6 +1441,7 @@ async function applyPluginModeHooksConfig(
 	const hooksConfig = mergeManagedCodexHooksConfig(
 		existingHooksContent,
 		pkgRoot,
+		hooksPath,
 	);
 	await syncManagedContent(
 		hooksConfig,
@@ -1521,6 +1527,7 @@ async function cleanupPluginModeLegacyConfig(
 	config = stripPluginModeLegacyRootDefaults(config);
 	config = stripOmxSeededBehavioralDefaults(config);
 	config = stripOmxFeatureFlags(config);
+	config = stripManagedCodexHookTrustState(config);
 	config = stripOmxEnvSettings(config);
 	config = config.trim();
 	const nextConfig = config.length > 0 ? `${config}\n` : "";
@@ -1919,7 +1926,7 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 				? await readFile(scopeDirs.codexConfigFile, "utf-8")
 				: "";
 			console.log(
-				`  Native Codex hooks and runtime feature flags refresh complete (${scopeDirs.codexHooksFile}; hooks, goals).\n`,
+				`  Native Codex hooks and runtime feature flags refresh complete (${scopeDirs.codexHooksFile}; codex_hooks, goals).\n`,
 			);
 
 		if (usePluginDeveloperInstructionsDefault) {
