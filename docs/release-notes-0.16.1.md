@@ -80,4 +80,8 @@ This release was built from `v0.16.0..v0.16.1` and includes 25 merged PRs plus f
 - Release tag workflow for `v0.16.1`: passed, including version sync, native artifact publication, native asset smoke verification, packed global install smoke test, and npm package publication.
 - Local release-prep gates included Rust workspace tests, TypeScript build, lint/no-unused checks, targeted Node tests, and `npm pack --dry-run`.
 
+## Contributors
+
+Thanks to @Yeachan-Heo, @lkraider, @HaD0Yun, @pgagarinov, and @qzzqzzb for the PRs and fixes that made up the `0.16.1` train, plus the release-prep/review work that hardened the final tag.
+
 **Full Changelog**: [`v0.16.0...v0.16.1`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.16.0...v0.16.1)
