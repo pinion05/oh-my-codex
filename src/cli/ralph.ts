@@ -2,8 +2,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { startMode, updateModeState } from '../modes/base.js';
-import { readApprovedExecutionLaunchHint, type ApprovedExecutionLaunchHint } from '../planning/artifacts.js';
+import { readApprovedExecutionLaunchHintOutcome, type ApprovedExecutionLaunchHint } from '../planning/artifacts.js';
 import { ensureCanonicalRalphArtifacts } from '../ralph/persistence.js';
+import { resolveCodexHomeForLaunch } from './codex-home.js';
 import {
   buildFollowupStaffingPlan,
   resolveAvailableAgentTypes,
@@ -151,12 +152,13 @@ export function readMatchedApprovedRalphExecutionHint(
   cwd: string,
   explicitTask: string,
 ): ApprovedExecutionLaunchHint | null {
+  const outcome = readApprovedExecutionLaunchHintOutcome(
+    cwd,
+    'ralph',
+    explicitTask === 'ralph-cli-launch' ? {} : { task: explicitTask },
+  );
   return resolveApprovedRalphExecutionHint(
-    readApprovedExecutionLaunchHint(
-      cwd,
-      'ralph',
-      explicitTask === 'ralph-cli-launch' ? {} : { task: explicitTask },
-    ),
+    outcome.status === 'resolved' ? outcome.hint : null,
     explicitTask,
   );
 }
@@ -179,6 +181,35 @@ function buildRalphApprovedContextLines(approvedHint: ApprovedExecutionLaunchHin
     lines.push('Approved repository context summary (bounded, inspectable):');
     lines.push(approvedHint.repositoryContextSummary.content);
   }
+  if (approvedHint.contextPackStatus === 'ready') {
+    return lines;
+  }
+  if (approvedHint.contextPackStatus === 'plan-only') {
+    lines.push('- context pack: not declared in the approved plan; using the pre-context-pack plan-only handoff baseline.');
+    lines.push('- Plan-only fallback: use the approved plan, matching test specs, and any deep-interview artifacts as repair inputs; do not treat this as approved context-bearing execution.');
+    return lines;
+  }
+  if (approvedHint.contextPackStatus === 'incomplete') {
+    if (approvedHint.contextPackIssues.length > 0) {
+      lines.push(`- incomplete context pack issues: ${approvedHint.contextPackIssues.join(' | ')}`);
+    }
+    if (approvedHint.missingRequiredContextPackRoles.length > 0) {
+      lines.push(`- missing required context roles: ${approvedHint.missingRequiredContextPackRoles.join(', ')}`);
+    }
+    lines.push('- Incomplete-pack fallback: use the approved plan, matching test specs, and any deep-interview artifacts only as repair inputs; repair or recreate the canonical context pack with required role coverage before broadening context.');
+    return lines;
+  }
+  if (approvedHint.contextPackStatus === 'invalid') {
+    if (approvedHint.contextPackIssues.length > 0) {
+      lines.push(`- invalid context pack issues: ${approvedHint.contextPackIssues.join(' | ')}`);
+    }
+    lines.push('- Invalid-pack fallback: use the approved plan, matching test specs, and any deep-interview artifacts only as repair inputs; repair or recreate the canonical context pack before broadening context.');
+    return lines;
+  }
+  if (approvedHint.contextPackIssues.length > 0) {
+    lines.push(`- missing-baseline issues: ${approvedHint.contextPackIssues.join(' | ')}`);
+  }
+  lines.push('- Missing-baseline fallback: the latest approved plan is missing its matching test spec, so use the surfaced plan as lineage guidance only and restore the missing baseline before broadening context.');
   return lines;
 }
 
@@ -296,7 +327,10 @@ export async function ralphCommand(args: string[]): Promise<void> {
   const task = explicitTask === 'ralph-cli-launch' ? approvedHint?.task ?? explicitTask : explicitTask;
   const noDeslop = normalizedArgs.some((arg) => arg.toLowerCase() === '--no-deslop');
   const availableAgentTypes = await resolveAvailableAgentTypes(cwd);
-  const staffingPlan = buildFollowupStaffingPlan('ralph', task, availableAgentTypes);
+  const codexHomeOverride = resolveCodexHomeForLaunch(cwd, process.env);
+  const staffingPlan = buildFollowupStaffingPlan('ralph', task, availableAgentTypes, {
+    codexHomeOverride,
+  });
   await startMode('ralph', task, 50);
   const sessionFiles = await writeRalphSessionFiles(cwd, task, { noDeslop, approvedHint });
   await updateModeState('ralph', {

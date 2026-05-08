@@ -32,6 +32,10 @@ const deepInterviewSkill = readFileSync(
 	join(__dirname, "../../../skills/deep-interview/SKILL.md"),
 	"utf-8",
 );
+const pluginDeepInterviewSkill = readFileSync(
+	join(__dirname, "../../../plugins/oh-my-codex/skills/deep-interview/SKILL.md"),
+	"utf-8",
+);
 const autopilotSkill = readFileSync(
 	join(__dirname, "../../../skills/autopilot/SKILL.md"),
 	"utf-8",
@@ -111,6 +115,36 @@ describe("deep-interview Ouroboros contract", () => {
 			deepInterviewSkill,
 			/Round 4\+: allow explicit early exit with risk warning/i,
 		);
+	});
+
+	it("routes facts before judgment without changing the deep-interview question source", () => {
+		assert.match(deepInterviewSkill, /Route facts before judgment/i);
+		assert.match(deepInterviewSkill, /\[from-code\]\[auto-confirmed\]/i);
+		assert.match(deepInterviewSkill, /\[from-code\]/i);
+		assert.match(deepInterviewSkill, /\[from-research\]/i);
+		assert.match(deepInterviewSkill, /\[from-user\]/i);
+		assert.match(deepInterviewSkill, /transcript\/spec labels only/i);
+		assert.match(deepInterviewSkill, /never use them as `omx question` `source` values/i);
+		assert.match(deepInterviewSkill, /runtime `source: "deep-interview"` contract/i);
+		assert.match(deepInterviewSkill, /not interview rounds/i);
+		assert.match(deepInterviewSkill, /do not call `omx question`/i);
+		assert.match(deepInterviewSkill, /do not create a pending deep-interview question obligation/i);
+		assert.match(deepInterviewSkill, /Auto-confirm only descriptive facts/i);
+		assert.match(deepInterviewSkill, /decision-bearing question to the user as `\[from-user\]`/i);
+	});
+
+	it("adds Ouroboros-style rhythm, breadth, and practical closure guards", () => {
+		assert.match(deepInterviewSkill, /Breadth Ledger/i);
+		assert.match(deepInterviewSkill, /scope, constraints, outputs, verification, brownfield integration/i);
+		assert.match(deepInterviewSkill, /guard, not a mandatory rotation rule/i);
+		assert.match(deepInterviewSkill, /zoom out only when another material track remains unresolved/i);
+		assert.match(deepInterviewSkill, /practical closure audit/i);
+		assert.match(deepInterviewSkill, /another question would change execution materially/i);
+		assert.match(deepInterviewSkill, /not merely polish wording or chase a narrow edge case/i);
+		assert.match(deepInterviewSkill, /low ambiguity score as permission to audit closure/i);
+		assert.match(deepInterviewSkill, /Dialectic Rhythm Guard/i);
+		assert.match(deepInterviewSkill, /After 3 consecutive non-user or confirmation answers/i);
+		assert.match(deepInterviewSkill, /must solicit direct human judgment/i);
 	});
 
 	it("moves challenge modes and preserved evidence discipline earlier", () => {
@@ -257,6 +291,15 @@ describe("deep-interview Ouroboros contract", () => {
 		assert.match(deepInterviewSkill, /team verification path/i);
 	});
 
+	it("suggests contextual goal-mode follow-ups without replacing Ralph or team lanes", () => {
+		assert.match(deepInterviewSkill, /Goal-mode follow-ups/i);
+		assert.match(deepInterviewSkill, /\$ultragoal[\s\S]*general goal-oriented follow-up/i);
+		assert.match(deepInterviewSkill, /\$autoresearch-goal[\s\S]*research project/i);
+		assert.match(deepInterviewSkill, /\$performance-goal[\s\S]*(optimization|performance) project/i);
+		assert.match(deepInterviewSkill, /Preserve `\$ralph`[\s\S]*and `\$team`/i);
+		assert.match(deepInterviewSkill, /not as generic replacements for implementation lanes/i);
+	});
+
 	it("uses OMX-native output paths", () => {
 		assert.match(deepInterviewSkill, /\.omx\/interviews\//);
 		assert.match(deepInterviewSkill, /\.omx\/specs\//);
@@ -331,6 +374,10 @@ describe("cross-skill and AGENTS coherence for deep-interview", () => {
 	it("autopilot references deep-interview handoff", () => {
 		assert.match(autopilotSkill, /deep-interview/i);
 		assert.match(autopilotSkill, /Socratic/i);
+	});
+
+	it("plugin mirror keeps the deep-interview skill aligned", () => {
+		assert.equal(pluginDeepInterviewSkill, deepInterviewSkill);
 	});
 
 	it("tracked AGENTS surfaces include ouroboros keyword and updated description", () => {

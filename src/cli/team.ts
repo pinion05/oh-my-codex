@@ -11,7 +11,8 @@ import type { TeamEvent } from '../team/state.js';
 import { parseWorktreeMode, type WorktreeMode } from '../team/worktree.js';
 import { classifyTaskSize } from '../hooks/task-size-detector.js';
 import {
-  readApprovedExecutionLaunchHint,
+  isApprovedExecutionContextReadyStatus,
+  isApprovedExecutionFollowupReadyStatus,
   readApprovedExecutionLaunchHintOutcome,
   type ApprovedExecutionLaunchHint,
   type ApprovedRepositoryContextSummary,
@@ -38,6 +39,7 @@ import {
   resolvePersistedApprovedTeamExecutionContinuityStateSync,
   type ApprovedTeamExecutionBinding,
 } from '../team/approved-execution.js';
+import { resolveCodexHomeForLaunch } from './codex-home.js';
 
 interface TeamCliOptions {
   verbose?: boolean;
@@ -52,6 +54,7 @@ interface ParsedTeamArgs {
   teamName: string;
   displayName?: string;
   allowRepoAwareDagHandoff: boolean;
+  dagFallbackReason?: string;
   approvedRepositoryContextSummary?: ApprovedRepositoryContextSummary;
   approvedExecution?: ApprovedTeamExecutionBinding;
 }
@@ -180,10 +183,20 @@ function resolveApprovedTeamFollowupContext(cwd: string, task: string): TeamFoll
     if (continuity.status === 'malformed') {
       throw new Error(`approved_execution_binding_malformed:${persistedTeamName}`);
     }
+    if (continuity.status === 'ambiguous') {
+      throw new Error(
+        `approved_execution_binding_ambiguous:${continuity.binding.prd_path}:${continuity.binding.task}`,
+      );
+    }
     if (continuity.status === 'stale') {
       throw new Error(`approved_execution_binding_stale:${continuity.binding.prd_path}:${continuity.binding.task}`);
     }
     if (continuity.status === 'valid') {
+      if (!isApprovedExecutionFollowupReadyStatus(continuity.approvedHint.contextPackStatus)) {
+        throw new Error(
+          `approved_execution_binding_nonready:${continuity.approvedHint.contextPackStatus}:${continuity.binding.prd_path}:${continuity.binding.task}`,
+        );
+      }
       approvedHint = continuity.approvedHint;
     }
   }
@@ -194,6 +207,9 @@ function resolveApprovedTeamFollowupContext(cwd: string, task: string): TeamFoll
       throw new Error('approved_execution_hint_ambiguous:team');
     }
     if (approvedHintOutcome.status !== 'resolved') return null;
+    if (!isApprovedExecutionFollowupReadyStatus(approvedHintOutcome.hint.contextPackStatus)) {
+      throw new Error(`approved_execution_hint_nonready:team:${approvedHintOutcome.hint.contextPackStatus}`);
+    }
     approvedHint = approvedHintOutcome.hint;
   }
 
@@ -844,14 +860,31 @@ export function parseTeamArgs(args: string[], cwd: string = process.cwd()): Pars
     }
   }
 
+  const approvedHintOutcome = followupContext
+    ? null
+    : readApprovedExecutionLaunchHintOutcome(cwd, 'team', { task: effectiveTask });
   const approvedHint = followupContext?.approvedHint
-    ?? readApprovedExecutionLaunchHint(cwd, 'team', { task: effectiveTask });
-  const matchesApprovedLaunchHint = approvedHint?.task.trim() === effectiveTask.trim()
-    && (approvedHint.workerCount == null || approvedHint.workerCount === workerCount)
-    && (approvedHint.agentType == null || approvedHint.agentType === agentType);
+    ?? (approvedHintOutcome?.status === 'resolved' && approvedHintOutcome.hint.contextPackStatus !== 'missing-baseline'
+      ? approvedHintOutcome.hint
+      : null);
+  const followupReadyApprovedHint = approvedHint && isApprovedExecutionFollowupReadyStatus(approvedHint.contextPackStatus)
+    ? approvedHint
+    : null;
+  const contextReadyApprovedHint = followupReadyApprovedHint
+    && isApprovedExecutionContextReadyStatus(followupReadyApprovedHint.contextPackStatus)
+    ? followupReadyApprovedHint
+    : null;
+  const matchesApprovedLaunchHint = followupReadyApprovedHint?.task.trim() === effectiveTask.trim()
+    && (followupReadyApprovedHint.workerCount == null || followupReadyApprovedHint.workerCount === workerCount)
+    && (followupReadyApprovedHint.agentType == null || followupReadyApprovedHint.agentType === agentType);
   const allowRepoAwareDagHandoff = followupContext != null || matchesApprovedLaunchHint;
+  const dagFallbackReason = followupContext == null
+    && approvedHintOutcome?.status === 'resolved'
+    && !isApprovedExecutionFollowupReadyStatus(approvedHintOutcome.hint.contextPackStatus)
+    ? `context_pack_not_followup_ready:${approvedHintOutcome.hint.contextPackStatus}`
+    : undefined;
   const approvedRepositoryContextSummary = allowRepoAwareDagHandoff
-    ? approvedHint?.repositoryContextSummary
+    ? contextReadyApprovedHint?.repositoryContextSummary
     : undefined;
 
   const teamName = sanitizeTeamName(slugifyTask(effectiveTask));
@@ -864,8 +897,11 @@ export function parseTeamArgs(args: string[], cwd: string = process.cwd()): Pars
     teamName,
     displayName: teamName,
     allowRepoAwareDagHandoff,
+    ...(dagFallbackReason ? { dagFallbackReason } : {}),
     ...(approvedRepositoryContextSummary ? { approvedRepositoryContextSummary } : {}),
-    ...(allowRepoAwareDagHandoff && approvedHint ? { approvedExecution: buildApprovedTeamExecutionBinding(approvedHint) } : {}),
+    ...(allowRepoAwareDagHandoff && contextReadyApprovedHint
+      ? { approvedExecution: buildApprovedTeamExecutionBinding(contextReadyApprovedHint) }
+      : {}),
   };
 }
 
@@ -1309,6 +1345,7 @@ export function buildLeaderMonitoringHints(teamName: string): string[] {
 
 export async function teamCommand(args: string[], _options: TeamCliOptions = {}): Promise<void> {
   const cwd = process.cwd();
+  const codexHomeOverride = resolveCodexHomeForLaunch(cwd, process.env);
   const parsedWorktree = parseWorktreeMode(args);
   const worktreeMode = resolveDefaultTeamWorktreeMode(parsedWorktree.mode);
   const teamArgs = parsedWorktree.remainingArgs;
@@ -1559,6 +1596,7 @@ export async function teamCommand(args: string[], _options: TeamCliOptions = {})
     const staffingPlan = buildFollowupStaffingPlan('team', runtime.config.task, availableAgentTypes, {
       workerCount: runtime.config.worker_count,
       fallbackRole: resolveImplicitTeamFallbackRole(runtime.config.agent_type, false),
+      codexHomeOverride,
     });
     await renderStartSummary(runtime, staffingPlan);
     return;
@@ -1606,6 +1644,7 @@ export async function teamCommand(args: string[], _options: TeamCliOptions = {})
     cwd,
     buildLegacyPlan: buildTeamExecutionPlan,
     allowDagHandoff: parsed.allowRepoAwareDagHandoff,
+    dagFallbackReason: parsed.dagFallbackReason,
     approvedRepositoryContextSummary: parsed.approvedRepositoryContextSummary,
   });
   const tasks = executionPlan.tasks;
@@ -1616,6 +1655,7 @@ export async function teamCommand(args: string[], _options: TeamCliOptions = {})
   const staffingPlan = buildFollowupStaffingPlan('team', parsed.task, availableAgentTypes, {
     workerCount: executionPlan.workerCount,
     fallbackRole: resolveImplicitTeamFallbackRole(parsed.agentType, parsed.explicitAgentType),
+    codexHomeOverride,
   });
   const runtime = await startTeam(
     parsed.teamName,
@@ -1625,6 +1665,7 @@ export async function teamCommand(args: string[], _options: TeamCliOptions = {})
     tasks,
     cwd,
     {
+      codexHomeOverride,
       worktreeMode,
       decompositionMetadata: executionPlan.metadata,
       approvedExecution: parsed.approvedExecution ?? null,

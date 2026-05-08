@@ -1,7 +1,8 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
-import { basename, dirname, join } from 'path';
+import { createHash } from 'node:crypto';
+import { mkdtemp, rm, mkdir, readFile, writeFile } from 'fs/promises';
+import { basename, dirname, join, relative } from 'path';
 import { tmpdir } from 'os';
 import { existsSync } from 'fs';
 import type { StageContext } from '../types.js';
@@ -22,6 +23,54 @@ function encodeApprovedExecutionTask(task: string, quote: 'single' | 'double'): 
   return quote === 'single'
     ? `'${task.replace(/'/g, "\\'")}'`
     : `"${task.replace(/"/g, '\\"')}"`;
+}
+
+function computeGitBlobSha1(content: string): string {
+  const buffer = Buffer.from(content, 'utf-8');
+  const header = Buffer.from(`blob ${buffer.length}\0`, 'utf-8');
+  return createHash('sha1').update(header).update(buffer).digest('hex');
+}
+
+function canonicalContextPackRelativePath(slug: string): string {
+  return `.omx/context/context-20260507T120000Z-${slug}.json`;
+}
+
+function buildContextPackOutcome(relativePackPath: string): string {
+  return [
+    '## Context Pack Outcome',
+    '',
+    `- pack: created \`${relativePackPath}\``,
+  ].join('\n');
+}
+
+async function writeReadyContextPack(
+  cwd: string,
+  slug: string,
+  prdPath: string,
+  testSpecPath: string,
+): Promise<void> {
+  const contextDir = join(cwd, '.omx', 'context');
+  const packPath = join(cwd, canonicalContextPackRelativePath(slug));
+  const prdContent = await readFile(prdPath, 'utf-8');
+  const testSpecContent = await readFile(testSpecPath, 'utf-8');
+  await mkdir(contextDir, { recursive: true });
+  await writeFile(packPath, JSON.stringify({
+    slug,
+    basis: {
+      prd: {
+        path: relative(cwd, prdPath).replaceAll('\\', '/'),
+        sha1: computeGitBlobSha1(prdContent),
+      },
+      testSpecs: [{
+        path: relative(cwd, testSpecPath).replaceAll('\\', '/'),
+        sha1: computeGitBlobSha1(testSpecContent),
+      }],
+    },
+    entries: ['scope', 'build', 'verify'].map((role, index) => ({
+      path: `src/${role}-${index}.ts`,
+      roles: [role],
+    })),
+  }, null, 2));
 }
 
 function makeCtx(overrides: Partial<StageContext> = {}): StageContext {
@@ -233,11 +282,19 @@ describe('Team Exec Stage', () => {
     const plansDir = join(tempDir, '.omx', 'plans');
     await mkdir(plansDir, { recursive: true });
     const approvedPrdPath = join(plansDir, 'prd-zeta.md');
+    const approvedTestSpecPath = join(plansDir, 'test-spec-zeta.md');
     await writeFile(
       approvedPrdPath,
-      '# Zeta plan\n\nLaunch via omx team 5:debugger "Execute zeta handoff"\n',
+      [
+        '# Zeta plan',
+        '',
+        buildContextPackOutcome(canonicalContextPackRelativePath('zeta')),
+        '',
+        'Launch via omx team 5:debugger "Execute zeta handoff"',
+      ].join('\n'),
     );
-    await writeFile(join(plansDir, 'test-spec-zeta.md'), '# Zeta test spec\n');
+    await writeFile(approvedTestSpecPath, '# Zeta test spec\n');
+    await writeReadyContextPack(tempDir, 'zeta', approvedPrdPath, approvedTestSpecPath);
 
     const previousCwd = process.cwd();
     try {
@@ -258,12 +315,246 @@ describe('Team Exec Stage', () => {
       assert.equal(result.status, 'completed');
       const descriptor = (result.artifacts as Record<string, unknown>).teamDescriptor as Record<string, unknown>;
       const instruction = (result.artifacts as Record<string, unknown>).instruction as string;
+      const runtimeCliInput = decodeRuntimeCliInstructionPayload(instruction);
       assert.equal(descriptor.task, 'Execute zeta handoff');
+      assert.deepEqual(descriptor.approvedExecution, {
+        prd_path: approvedPrdPath,
+        task: 'Execute zeta handoff',
+        command: 'omx team 5:debugger "Execute zeta handoff"',
+      });
       assert.match(instruction, /Execute zeta handoff/);
       assert.doesNotMatch(instruction, /plan-content/);
       assert.ok(Array.isArray(descriptor.availableAgentTypes));
       assert.ok((descriptor.availableAgentTypes as unknown[]).length > 0);
       assert.equal(typeof (descriptor.staffingPlan as Record<string, unknown>).staffingSummary, 'string');
+      assert.equal(runtimeCliInput.task, 'Execute zeta handoff');
+      assert.deepEqual(runtimeCliInput.approvedExecution, descriptor.approvedExecution);
+      assert.equal(runtimeCliInput.workerCount, 2);
+      assert.equal(runtimeCliInput.agentType, 'executor');
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
+
+  it('derives the team-exec task from the selected approved PRD when a newer draft is incomplete', async () => {
+    const plansDir = join(tempDir, '.omx', 'plans');
+    await mkdir(plansDir, { recursive: true });
+    const approvedPrdPath = join(plansDir, 'prd-zeta.md');
+    const approvedTestSpecPath = join(plansDir, 'test-spec-zeta.md');
+    await writeFile(
+      approvedPrdPath,
+      [
+        '# Zeta plan',
+        '',
+        buildContextPackOutcome(canonicalContextPackRelativePath('zeta')),
+        '',
+        'Launch via omx team 5:debugger "Execute zeta handoff"',
+      ].join('\n'),
+    );
+    await writeFile(approvedTestSpecPath, '# Zeta test spec\n');
+    await writeReadyContextPack(tempDir, 'zeta', approvedPrdPath, approvedTestSpecPath);
+    await writeFile(join(plansDir, 'prd-zulu.md'), '# Zulu draft\n\nNo approved team launch here.\n');
+
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tmpdir());
+      const stage = createTeamExecStage();
+      const result = await stage.run(makeCtx({
+        task: 'original request task',
+        artifacts: {
+          ralplan: {
+            task: 'original request task',
+            stage: 'ralplan',
+            latestPlanPath: join('.omx', 'plans', 'prd-zeta.md'),
+          },
+        },
+      }));
+
+      assert.equal(result.status, 'completed');
+      const descriptor = (result.artifacts as Record<string, unknown>).teamDescriptor as Record<string, unknown>;
+      const instruction = (result.artifacts as Record<string, unknown>).instruction as string;
+      const runtimeCliInput = decodeRuntimeCliInstructionPayload(instruction);
+      assert.equal(descriptor.task, 'Execute zeta handoff');
+      assert.deepEqual(descriptor.approvedExecution, {
+        prd_path: approvedPrdPath,
+        task: 'Execute zeta handoff',
+        command: 'omx team 5:debugger "Execute zeta handoff"',
+      });
+      assert.deepEqual(runtimeCliInput.approvedExecution, descriptor.approvedExecution);
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
+
+  it('skips newer incomplete runtime drafts when selecting the approved team handoff', async () => {
+    const plansDir = join(tempDir, '.omx', 'plans');
+    await mkdir(plansDir, { recursive: true });
+    const approvedPrdPath = join(plansDir, 'prd-zeta.md');
+    const approvedTestSpecPath = join(plansDir, 'test-spec-zeta.md');
+    await writeFile(
+      approvedPrdPath,
+      [
+        '# Zeta plan',
+        '',
+        buildContextPackOutcome(canonicalContextPackRelativePath('zeta')),
+        '',
+        'Launch via omx team 5:debugger "Execute zeta handoff"',
+      ].join('\n'),
+    );
+    await writeFile(approvedTestSpecPath, '# Zeta test spec\n');
+    await writeReadyContextPack(tempDir, 'zeta', approvedPrdPath, approvedTestSpecPath);
+    const incompleteDraftPath = join(plansDir, 'prd-zulu.md');
+    await writeFile(incompleteDraftPath, '# Zulu draft\n\nNo approved team launch here.\n');
+
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tmpdir());
+      const stage = createTeamExecStage();
+      const result = await stage.run(makeCtx({
+        task: 'original request task',
+        artifacts: {
+          ralplan: {
+            task: 'original request task',
+            stage: 'ralplan',
+            latestPlanPath: join('.omx', 'plans', 'prd-zeta.md'),
+            drafts: [
+              { planPath: join('.omx', 'plans', 'prd-zeta.md') },
+              { planPath: join('.omx', 'plans', 'prd-zulu.md') },
+            ],
+          },
+        },
+      }));
+
+      assert.equal(result.status, 'completed');
+      const descriptor = (result.artifacts as Record<string, unknown>).teamDescriptor as Record<string, unknown>;
+      const instruction = (result.artifacts as Record<string, unknown>).instruction as string;
+      const runtimeCliInput = decodeRuntimeCliInstructionPayload(instruction);
+      assert.equal(descriptor.task, 'Execute zeta handoff');
+      assert.deepEqual(descriptor.approvedExecution, {
+        prd_path: approvedPrdPath,
+        task: 'Execute zeta handoff',
+        command: 'omx team 5:debugger "Execute zeta handoff"',
+      });
+      assert.doesNotMatch(instruction, new RegExp(escapeRegExp(incompleteDraftPath)));
+      assert.deepEqual(runtimeCliInput.approvedExecution, descriptor.approvedExecution);
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
+
+  it('keeps team-exec generic for plan-only approved handoffs while reusing the approved task text', async () => {
+    const plansDir = join(tempDir, '.omx', 'plans');
+    await mkdir(plansDir, { recursive: true });
+    const approvedPrdPath = join(plansDir, 'prd-plan-only.md');
+    await writeFile(
+      approvedPrdPath,
+      '# Plan-only plan\n\nLaunch via omx team 5:debugger "Execute plan-only team handoff"\n',
+    );
+    await writeFile(join(plansDir, 'test-spec-plan-only.md'), '# Plan-only test spec\n');
+    await writeFile(join(plansDir, 'repo-context-plan-only.md'), 'Plan-only repo summary should not reach workers.\n');
+
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tmpdir());
+      const stage = createTeamExecStage();
+      const result = await stage.run(makeCtx({
+        task: 'original request task',
+        artifacts: {
+          ralplan: {
+            task: 'original request task',
+            stage: 'ralplan',
+            latestPlanPath: join('.omx', 'plans', 'prd-plan-only.md'),
+          },
+        },
+      }));
+
+      assert.equal(result.status, 'completed');
+      const descriptor = (result.artifacts as Record<string, unknown>).teamDescriptor as Record<string, unknown>;
+      const instruction = (result.artifacts as Record<string, unknown>).instruction as string;
+      const runtimeCliInput = decodeRuntimeCliInstructionPayload(instruction);
+      assert.equal(descriptor.task, 'Execute plan-only team handoff');
+      assert.equal(descriptor.approvedExecution, null);
+      assert.equal(runtimeCliInput.task, 'Execute plan-only team handoff');
+      assert.equal(runtimeCliInput.approvedExecution, null);
+      assert.equal(
+        (runtimeCliInput.decompositionMetadata as Record<string, unknown> | undefined)?.approved_context_summary,
+        undefined,
+      );
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
+
+  it('blocks team-exec when the selected approved handoff is missing its baseline', async () => {
+    const plansDir = join(tempDir, '.omx', 'plans');
+    await mkdir(plansDir, { recursive: true });
+    await writeFile(
+      join(plansDir, 'prd-issue-missing-baseline.md'),
+      '# Missing-baseline plan\n\nLaunch via omx team 5:debugger "Execute missing-baseline team handoff"\n',
+    );
+
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tmpdir());
+      const stage = createTeamExecStage();
+      const result = await stage.run(makeCtx({
+        task: 'original request task',
+        artifacts: {
+          ralplan: {
+            task: 'original request task',
+            stage: 'ralplan',
+            latestPlanPath: join('.omx', 'plans', 'prd-issue-missing-baseline.md'),
+          },
+        },
+      }));
+      assert.equal(result.status, 'failed');
+      assert.match(
+        result.error ?? '',
+        /team_exec_approved_handoff_nonready:missing-baseline:.*prd-issue-missing-baseline\.md/,
+      );
+      assert.deepEqual(result.artifacts, {});
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
+
+  it('blocks team-exec when the selected approved handoff is nonready', async () => {
+    const plansDir = join(tempDir, '.omx', 'plans');
+    await mkdir(plansDir, { recursive: true });
+    await writeFile(
+      join(plansDir, 'prd-issue-nonready.md'),
+      [
+        '# Nonready plan',
+        '',
+        '## Context Pack Outcome',
+        '',
+        '- pack: created `.omx/context/context-20260507T120000Z-other.json`',
+        '',
+        'Launch via omx team 5:debugger "Execute nonready team handoff"',
+      ].join('\n'),
+    );
+    await writeFile(join(plansDir, 'test-spec-issue-nonready.md'), '# Nonready test spec\n');
+
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tmpdir());
+      const stage = createTeamExecStage();
+      const result = await stage.run(makeCtx({
+        task: 'original request task',
+        artifacts: {
+          ralplan: {
+            task: 'original request task',
+            stage: 'ralplan',
+            latestPlanPath: join('.omx', 'plans', 'prd-issue-nonready.md'),
+          },
+        },
+      }));
+      assert.equal(result.status, 'failed');
+      assert.match(
+        result.error ?? '',
+        /team_exec_approved_handoff_nonready:invalid:.*prd-issue-nonready\.md/,
+      );
+      assert.deepEqual(result.artifacts, {});
     } finally {
       process.chdir(previousCwd);
     }
@@ -514,9 +805,13 @@ describe('Team Exec Stage', () => {
     assert.equal(result.status, 'completed');
     const descriptor = (result.artifacts as Record<string, unknown>).teamDescriptor as Record<string, unknown>;
     const instruction = (result.artifacts as Record<string, unknown>).instruction as string;
+    const runtimeCliInput = decodeRuntimeCliInstructionPayload(instruction);
     assert.equal(descriptor.task, 'structural pipeline task');
+    assert.equal(descriptor.approvedExecution, null);
     assert.match(instruction, /structural pipeline task/);
     assert.doesNotMatch(instruction, /plan-content/);
+    assert.equal(runtimeCliInput.task, 'structural pipeline task');
+    assert.equal(runtimeCliInput.approvedExecution, null);
   });
 
   it('does not adopt a pre-existing approved plan when latestPlanPath is absent', async () => {
@@ -545,9 +840,13 @@ describe('Team Exec Stage', () => {
     assert.equal(result.status, 'completed');
     const descriptor = (result.artifacts as Record<string, unknown>).teamDescriptor as Record<string, unknown>;
     const instruction = (result.artifacts as Record<string, unknown>).instruction as string;
+    const runtimeCliInput = decodeRuntimeCliInstructionPayload(instruction);
     assert.equal(descriptor.task, 'generic pipeline task');
+    assert.equal(descriptor.approvedExecution, null);
     assert.match(instruction, /generic pipeline task/);
     assert.doesNotMatch(instruction, /Execute zeta handoff/);
+    assert.equal(runtimeCliInput.task, 'generic pipeline task');
+    assert.equal(runtimeCliInput.approvedExecution, null);
   });
 
   it('fails closed when latestPlanPath has no team launch hint', async () => {
@@ -625,6 +924,7 @@ describe('Team Exec Stage', () => {
         staffingPlan,
         useWorktrees: false,
         cwd: '/tmp/test',
+        approvedExecution: null,
       });
       const runtimeCliInput = decodeRuntimeCliInstructionPayload(instruction);
 
@@ -645,7 +945,8 @@ describe('Team Exec Stage', () => {
       assert.equal(runtimeCliInput.cwd, '/tmp/test');
       assert.ok(Array.isArray(runtimeCliInput.tasks));
       assert.equal((runtimeCliInput.tasks as unknown[]).length > 0, true);
-      assert.equal('task' in runtimeCliInput, false);
+      assert.equal(runtimeCliInput.task, 'implement feature');
+      assert.equal(runtimeCliInput.approvedExecution, null);
       assert.equal('useWorktrees' in runtimeCliInput, false);
       assert.equal(
         (runtimeCliInput.decompositionMetadata as Record<string, unknown>).decomposition_source,
@@ -668,11 +969,14 @@ describe('Team Exec Stage', () => {
         staffingPlan,
         useWorktrees: false,
         cwd: '/tmp',
+        approvedExecution: null,
       });
       const runtimeCliInput = decodeRuntimeCliInstructionPayload(instruction);
 
       assert.match(instruction, /runtime-cli\.js/);
       assert.match(instruction, /--input-json-base64/);
+      assert.equal(runtimeCliInput.task, longTask);
+      assert.equal(runtimeCliInput.approvedExecution, null);
       assert.equal(runtimeCliInput.workerCount, 1);
       assert.equal(runtimeCliInput.agentType, 'executor');
       assert.match(instruction, /staffing=/);
@@ -691,6 +995,7 @@ describe('Team Exec Stage', () => {
         staffingPlan,
         useWorktrees: false,
         cwd: 'C:\\repo with spaces',
+        approvedExecution: null,
       }, { platform: 'win32' });
       const runtimeCliInput = decodeRuntimeCliInstructionPayload(instruction);
       const commandPrefix = instruction.split('--input-json-base64')[0] ?? '';
@@ -701,6 +1006,8 @@ describe('Team Exec Stage', () => {
       assert.doesNotMatch(encodedPayload, /[%&|<>"'\s]/);
       assert.doesNotMatch(instruction, /# staffing=/);
       assert.doesNotMatch(instruction, /# verify=/);
+      assert.equal(runtimeCliInput.task, task);
+      assert.equal(runtimeCliInput.approvedExecution, null);
       assert.equal(runtimeCliInput.workerCount, 1);
       assert.equal(runtimeCliInput.agentType, 'executor');
       assert.equal('agentTypes' in runtimeCliInput, false);
@@ -749,12 +1056,15 @@ describe('Team Exec Stage', () => {
         staffingPlan,
         useWorktrees: false,
         cwd: tempDir,
+        approvedExecution: null,
       });
       const runtimeCliInput = decodeRuntimeCliInstructionPayload(instruction);
       const tasks = runtimeCliInput.tasks as Array<Record<string, unknown>>;
       const decompositionMetadata = runtimeCliInput.decompositionMetadata as Record<string, unknown>;
 
       assert.equal(runtimeCliInput.teamName, 'execute-approved-demo-plan');
+      assert.equal(runtimeCliInput.task, 'Execute approved demo plan');
+      assert.equal(runtimeCliInput.approvedExecution, null);
       assert.equal(runtimeCliInput.workerCount, 2);
       assert.equal(runtimeCliInput.agentType, 'executor');
       assert.equal(tasks.length, 2);

@@ -10,9 +10,14 @@ function readCiWorkflow(): string {
 }
 
 function jobBlock(workflow: string, jobName: string): string {
-  const match = workflow.match(new RegExp(`^  ${jobName}:\\n([\\s\\S]*?)(?=^  [a-z0-9-]+:\\n|\\Z)`, 'm'));
-  assert.ok(match?.[0], `missing CI job block for ${jobName}`);
-  return match[0];
+  const startMatch = workflow.match(new RegExp(`(^|\\n)  ${jobName}:\\n`));
+  assert.ok(startMatch?.index !== undefined, `missing CI job block for ${jobName}`);
+
+  const start = startMatch.index + startMatch[1].length;
+  const afterJobHeader = start + `  ${jobName}:\n`.length;
+  const nextJobOffset = workflow.slice(afterJobHeader).search(/\n  [a-z0-9-]+:\n/);
+  const end = nextJobOffset === -1 ? workflow.length : afterJobHeader + nextJobOffset;
+  return workflow.slice(start, end);
 }
 
 describe('CI Rust gates', () => {
@@ -51,9 +56,9 @@ describe('CI Rust gates', () => {
     assert.match(workflow, /name:\s*Build dist artifact/);
     assert.match(workflow, /name:\s*Upload prebuilt dist artifact/);
     assert.match(workflow, /name:\s*ci-dist-node20/);
-    assert.match(workflow, /^  coverage-team-critical:\s*\n(?:.*\n)*?^\s+needs:\s*\[typecheck, build-dist\]/m);
-    assert.match(workflow, /^  ralph-persistence-gate:\s*\n(?:.*\n)*?^\s+needs:\s*\[typecheck, build-dist\]/m);
-    assert.match(workflow, /^  build:\s*\n(?:.*\n)*?^\s+needs:\s*\[rustfmt, clippy, lint, typecheck, build-dist\]/m);
+    assert.match(workflow, /^  coverage-team-critical:\s*\n(?:.*\n)*?^\s+needs:\s*\[build-dist\]/m);
+    assert.match(workflow, /^  ralph-persistence-gate:\s*\n(?:.*\n)*?^\s+needs:\s*\[build-dist\]/m);
+    assert.match(workflow, /^  build:\s*\n(?:.*\n)*?^\s+needs:\s*\[build-dist\]/m);
 
     for (const jobName of ['test', 'coverage-team-critical', 'ralph-persistence-gate', 'build']) {
       assert.match(
@@ -70,6 +75,27 @@ describe('CI Rust gates', () => {
     assert.doesNotMatch(testJob, /^\s+npm run build$/m);
   });
 
+  it('uses npm package caching without skipping clean dependency installs', () => {
+    const workflow = readCiWorkflow();
+
+    for (const jobName of ['lint', 'typecheck', 'build-dist', 'test', 'coverage-team-critical', 'ralph-persistence-gate', 'build']) {
+      const job = jobBlock(workflow, jobName);
+
+      assert.match(job, /uses:\s*actions\/setup-node@v6/);
+      assert.match(job, /cache:\s*npm/);
+      assert.match(job, /run:\s*npm ci/);
+      assert.doesNotMatch(job, /uses:\s*actions\/cache@v4/);
+      assert.doesNotMatch(job, /path:\s*node_modules/);
+      assert.doesNotMatch(job, /cache-hit != 'true'/);
+    }
+
+    for (const jobName of ['clippy', 'rust-tests', 'build']) {
+      assert.match(jobBlock(workflow, jobName), /uses:\s*Swatinem\/rust-cache@v2/);
+    }
+
+    assert.match(workflow, /needs:\s*\[rustfmt, clippy, rust-tests, lint, typecheck, test, coverage-team-critical, ralph-persistence-gate, build\]/);
+  });
+
   it('avoids path-filtered CI triggers so required checks cannot be skipped into a pending state', () => {
     const workflow = readCiWorkflow();
 
@@ -79,16 +105,34 @@ describe('CI Rust gates', () => {
   });
 
 
-  it('marks Rust formatting, Clippy, and tests as required in the CI status gate', () => {
+  it('marks every required CI lane as required and reported in the CI status gate', () => {
     const workflow = readCiWorkflow();
+    const ciStatusJob = jobBlock(workflow, 'ci-status');
+    const requiredJobs = [
+      'rustfmt',
+      'clippy',
+      'rust-tests',
+      'lint',
+      'typecheck',
+      'test',
+      'coverage-team-critical',
+      'ralph-persistence-gate',
+      'build',
+    ];
 
-    assert.match(workflow, /needs:\s*\[rustfmt, clippy, rust-tests, lint, typecheck, test, coverage-team-critical, ralph-persistence-gate, build\]/);
-    assert.match(workflow, /needs\.rustfmt\.result/);
-    assert.match(workflow, /needs\.clippy\.result/);
-    assert.match(workflow, /needs\.rust-tests\.result/);
-    assert.match(workflow, /echo "  rustfmt: \$\{\{ needs\.rustfmt\.result \}\}"/);
-    assert.match(workflow, /echo "  clippy: \$\{\{ needs\.clippy\.result \}\}"/);
-    assert.match(workflow, /echo "  rust-tests: \$\{\{ needs\.rust-tests\.result \}\}"/);
+    assert.match(
+      ciStatusJob,
+      /needs:\s*\[rustfmt, clippy, rust-tests, lint, typecheck, test, coverage-team-critical, ralph-persistence-gate, build\]/,
+    );
+
+    for (const jobName of requiredJobs) {
+      assert.match(ciStatusJob, new RegExp(`needs\\.${jobName}\\.result`), `${jobName} result should be checked`);
+      assert.match(
+        ciStatusJob,
+        new RegExp(`echo \"  ${jobName}: \\$\\{\\{ needs\\.${jobName}\\.result \\}\\}\"`),
+        `${jobName} result should be reported`,
+      );
+    }
   });
 
 

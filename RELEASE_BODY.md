@@ -1,54 +1,51 @@
-# oh-my-codex v0.16.0
+# oh-my-codex v0.16.1
 
 ## Summary
 
-`0.16.0` is a minor release for skill deprecation and native Codex goal-mode integration. It moves long-running workflow coordination toward durable repo artifacts plus explicit Codex goal reconciliation, while cleaning up obsolete plugin-delivered skill surfaces.
-
-Release candidate readiness pending final verification.
+`0.16.1` is a patch release after `0.16.0` focused on reliability and release-safety hardening across `omx explore`, CI dependency proof, session-scoped runtime authority, approved Team handoffs, context-pack status, deep-interview flow, and launch/runtime edge cases.
 
 ## Highlights
 
-- **Goal-mode native workflows** — `ultragoal`, `performance-goal`, and `autoresearch-goal` add durable plans, evaluator/professor-critic gates, ledgers, and model-facing Codex goal handoffs.
-- **Snapshot-reconciled completion** — completion checkpoints require fresh `get_goal` evidence that the expected objective is complete, preventing shell-only false completion.
-- **Skill delivery cleanup** — obsolete skills retired from installable/plugin delivery where catalog-deprecated; deprecated root wrappers may remain as compatibility stubs.
-- **Autoresearch migration** — direct `omx autoresearch` remains deprecated; use `$autoresearch` and `omx autoresearch-goal` for goal-mode-backed research workflows.
-- **Runtime reliability** — Team/Ralph handoffs, question batch handshakes, Stop hooks, boxed state routing, notification proxy handling, and explore startup bounds were hardened.
-- **Pipeline and docs polish** — GitHub package pipeline templates, Discord/proxy setup docs, and goal workflow docs are included.
+- **Explore safety hardening** — Codex-backed explore runs are bounded against process storms and output growth; the local fast path now rejects symlinked explicit file reads and avoids unbounded oversized text-search reads.
+- **CI install proof restored** — Node CI jobs run `npm ci` every time while keeping npm package caching, so release gates prove lockfile install integrity.
+- **Approved Team handoff repairs** — selected handoffs, invalid context-pack diagnostics, nonready repair-only behavior, binding transport, and DAG fallback status remain aligned through follow-up execution.
+- **Runtime state durability** — session-scoped runtime authority, project-scoped Codex goal state, stale skill-active/HUD cleanup, and MCP sibling cleanup are more reliable.
+- **Launch and UX hardening** — Darwin worktree launch assertions, Windows OMX root paths, current JS runtime helpers, plugin skill cache refresh, visual Ralph recovery, quieter native hooks, clearer launch-policy help, and deep-interview fact/judgment separation are included.
 
 ## Merged PRs / notable commits
 
-- #2132 — Retire obsolete OMX skills
-- #2117 — Protect goal workflows with snapshot reconciliation
-- #2113 — Honor proxy environments for notification transports
-- #2106 — Bound explore startup env and Codex timeouts
-- #2104 — Add Lore commit guard opt-out
-- #2102 — Add first-class ultragoal prompt workflow
-- #2100 — Make madmax launches own isolated runtime state
-- #2097 — Make multi-goal execution durable around Codex goal mode
-- #2095 — Let Ralph verifier children finish
-- #2092 — Clarify plugin setup guidance source
-- #2088 — Add GitHub package pipeline templates
-- #2086 — Fix boxed team state path routing
-- #2082 — Fix Ralph session state rebinding
-- #2078 — Fix MCP duplicate sibling cleanup leak
-- #2076 — Clarify ralplan handoff continuation status
-- #2074 — Clarify Discord webhook and bot setup
-- #2065 — Replace team stall nudges with worker Stop hook
-- #2055 — Integrate Ralph with Codex goal mode
+- #2178 — Keep Darwin worktree launch assertions path-stable
+- #2172 — Keep Team DAG fallbacks aligned with handoff status
+- #2171 — Close remaining approved handoff fallback gaps
+- #2170 — Preserve invalid context-pack role diagnostics
+- #2169 — Keep nonready approved handoffs repair-only
+- #2168 — Add UI design anti-slop signals
+- #2159 — Improve deep-interview flow by separating facts from judgment
+- #2158 — Enhance CI latency contract
+- #2157 — Fix Windows OMX root launch paths
+- #2155 — Quiet native hook background output
+- #2154 — Clarify launch-policy help
+- #2153 — Use current JS runtime for managed OMX helpers
+- #2152 — Fix plugin skill cache refresh
+- #2151 — Keep Codex goal state durable in project-scoped OMX sessions
+- #2146 / #2120 — Bound explore process storms and execution before semantic fallback
+- #2144 — Fix MCP pre-traffic app-server sibling leaks
+- #2141 — Make session-scoped runtime state the active authority
+- #2135 — Preserve Visual Ralph recovery across imagegen interrupts
+- #2134 — Keep disposable launch worktree state durable
 
 ## Upgrade notes
 
-- `ultragoal`, `performance-goal`, and `autoresearch-goal` require fresh Codex goal snapshots for durable completion reconciliation; OMX does not mutate hidden Codex goal state directly.
-- Treat direct `omx autoresearch` as deprecated. Use `$autoresearch` or `omx autoresearch-goal` instead.
-- If you relied on plugin-delivered deprecated skills, migrate to the active replacement skill or workflow listed by `omx list` / generated skill docs.
-- Publication remains blocked until local verification and GitHub CI are green.
+- `omx explore` local fast-path file reads no longer follow symlinks. Symlinked file prompts fall back to the harness path.
+- Local explore text search skips oversized files in the fast path; use the harness path for broader/large-file investigation.
+- CI no longer restores/skips a cached `node_modules` tree; expect `npm ci` to run in each Node job.
 
 ## Verification
 
-Release verification evidence is tracked in `docs/qa/release-readiness-0.16.0.md`. Final publication requires local gates plus GitHub CI.
+Release verification evidence is tracked in `docs/qa/release-readiness-0.16.1.md`.
 
 ## Contributors
 
-Thanks to @Yeachan-Heo, @HaD0Yun, @pgagarinov, and dependabot for contributions in this range.
+Thanks to @Yeachan-Heo and contributors for the post-`0.16.0` hardening train.
 
-**Full Changelog**: [`v0.15.3...v0.16.0`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.15.3...v0.16.0)
+**Full Changelog**: [`v0.16.0...v0.16.1`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.16.0...v0.16.1)

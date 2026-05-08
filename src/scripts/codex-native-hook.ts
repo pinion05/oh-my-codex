@@ -1,13 +1,16 @@
 import { execFileSync } from "child_process";
 import { closeSync, existsSync, openSync, readFileSync, readSync } from "fs";
-import { mkdir, readFile, readdir, writeFile } from "fs/promises";
+import { appendFile, mkdir, readFile, readdir, writeFile } from "fs/promises";
 import { extname, join, relative, resolve } from "path";
 import { pathToFileURL } from "url";
 import { readModeState, readModeStateForActiveDecision, readModeStateForSession, updateModeState } from "../modes/base.js";
 import {
   extractSessionIdFromInitializedStatePath,
+  getSkillActiveStatePaths,
   listActiveSkills,
+  readSkillActiveState,
   readVisibleSkillActiveState,
+  type SkillActiveStateLike,
 } from "../state/skill-active.js";
 import {
   readSubagentSessionSummary,
@@ -652,6 +655,7 @@ function readParentPid(pid: number): number | null {
     const raw = execFileSync("ps", ["-o", "ppid=", "-p", String(pid)], {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
     }).trim();
     const ppid = Number.parseInt(raw, 10);
     return Number.isFinite(ppid) && ppid > 0 ? ppid : null;
@@ -671,6 +675,7 @@ function readProcessCommand(pid: number): string {
     return execFileSync("ps", ["-o", "command=", "-p", String(pid)], {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
     }).trim();
   } catch {
     return "";
@@ -1924,6 +1929,87 @@ async function readBlockingSkillForStop(
   return null;
 }
 
+function uniqueNonEmpty(values: Array<string | undefined>): string[] {
+  return [...new Set(values.map((value) => safeString(value).trim()).filter(Boolean))];
+}
+
+function isTerminalOrInactiveModeState(state: Record<string, unknown> | null): boolean {
+  if (!state) return true;
+  if (state.active !== true) return true;
+  if (getRunContinuationSnapshot(state)?.terminal === true) return true;
+  const phase = safeString(state.current_phase ?? state.currentPhase).trim().toLowerCase();
+  return phase !== "" && TERMINAL_MODE_PHASES.has(phase);
+}
+
+async function readSessionScopedModeStateForRootSkill(
+  cwd: string,
+  skill: string,
+  sessionIds: string[],
+): Promise<Record<string, unknown> | null> {
+  for (const sessionId of sessionIds) {
+    const state = await readJsonIfExists(getStateFilePath(`${skill}-state.json`, cwd, sessionId));
+    if (state) return state;
+  }
+  return null;
+}
+
+async function reconcileStaleRootSkillActiveStateForStop(
+  cwd: string,
+  sessionId: string,
+): Promise<void> {
+  const { rootPath } = getSkillActiveStatePaths(cwd);
+  const rootState = await readSkillActiveState(rootPath);
+  if (!rootState?.active) return;
+
+  const initializedSessionId = extractSessionIdFromInitializedStatePath(rootState.initialized_state_path);
+  const rootSessionIds = uniqueNonEmpty([
+    sessionId,
+    safeString(rootState.session_id),
+    initializedSessionId,
+    ...listActiveSkills(rootState).map((entry) => safeString(entry.session_id)),
+  ]);
+  if (rootSessionIds.length === 0) return;
+
+  const activeEntries = listActiveSkills(rootState);
+  let changed = false;
+  const keptEntries = [];
+  for (const entry of activeEntries) {
+    const skill = safeString(entry.skill).trim();
+    if (!skill) continue;
+    const entrySessionId = safeString(entry.session_id).trim();
+    const candidateSessionIds = uniqueNonEmpty([
+      entrySessionId,
+      sessionId,
+      initializedSessionId,
+      safeString(rootState.session_id),
+    ]);
+    const modeState = await readSessionScopedModeStateForRootSkill(cwd, skill, candidateSessionIds);
+    if (isTerminalOrInactiveModeState(modeState)) {
+      changed = true;
+      continue;
+    }
+    keptEntries.push(entry);
+  }
+
+  if (!changed) return;
+
+  const nowIso = new Date().toISOString();
+  const nextRoot: SkillActiveStateLike = {
+    ...rootState,
+    active: keptEntries.length > 0,
+    skill: keptEntries[0]?.skill ?? safeString(rootState.skill).trim(),
+    phase: keptEntries[0]?.phase ?? safeString(rootState.phase).trim(),
+    updated_at: nowIso,
+    active_skills: keptEntries,
+    reconciled_at: nowIso,
+    reconciliation_reason: "stop_hook_session_state_terminal",
+  };
+  if (keptEntries.length === 0) {
+    nextRoot.phase = "inactive";
+  }
+  await writeFile(rootPath, JSON.stringify(nextRoot, null, 2));
+}
+
 function buildRalplanContinuationStatus(
   blocker: { phase: string; latestPlanPath?: string; planningComplete?: boolean; runOutcome?: string },
   activeSubagentCount: number,
@@ -2446,6 +2532,9 @@ async function buildStopHookOutput(
   const sessionId = readPayloadSessionId(payload);
   const canonicalSessionId = await resolveInternalSessionIdForPayload(cwd, sessionId);
   const threadId = readPayloadThreadId(payload);
+  if (canonicalSessionId) {
+    await reconcileStaleRootSkillActiveStateForStop(cwd, canonicalSessionId);
+  }
   const execFollowupOutput = await buildExecFollowupStopOutput(cwd, canonicalSessionId);
   if (execFollowupOutput) return execFollowupOutput;
   const ralphState = options.skipRalphStopBlock === true
@@ -3002,10 +3091,38 @@ function writeNativeHookJsonStdout(output: Record<string, unknown>): void {
   process.stdout.write(`${JSON.stringify(output)}\n`);
 }
 
+async function logNativeHookCliError(
+  cwd: string,
+  type: string,
+  error: unknown,
+  payload: CodexHookPayload = {},
+): Promise<void> {
+  const logsDir = join(cwd || process.cwd(), ".omx", "logs");
+  await mkdir(logsDir, { recursive: true }).catch(() => {});
+  const logPath = join(logsDir, `native-hook-${new Date().toISOString().split("T")[0]}.jsonl`);
+  await appendFile(
+    logPath,
+    JSON.stringify({
+      timestamp: new Date().toISOString(),
+      type,
+      hook_event_name: readHookEventName(payload) ?? "Unknown",
+      session_id: readPayloadSessionId(payload) || undefined,
+      thread_id: readPayloadThreadId(payload) || undefined,
+      turn_id: readPayloadTurnId(payload) || undefined,
+      error: error instanceof Error ? error.message : String(error),
+    }) + "\n",
+  ).catch(() => {});
+}
+
 function isStopDispatchFailureTestTrigger(payload: CodexHookPayload): boolean {
   return process.env.NODE_ENV === "test"
     && process.env.OMX_NATIVE_HOOK_TEST_THROW_STOP_DISPATCH === "1"
     && readHookEventName(payload) === "Stop";
+}
+
+function isDispatchFailureTestTrigger(): boolean {
+  return process.env.NODE_ENV === "test"
+    && process.env.OMX_NATIVE_HOOK_TEST_THROW_DISPATCH === "1";
 }
 
 function buildStopDispatchFailureOutput(error: unknown): Record<string, unknown> {
@@ -3023,6 +3140,7 @@ function buildStopDispatchFailureOutput(error: unknown): Record<string, unknown>
 export async function runCodexNativeHookCli(): Promise<void> {
   const { payload, parseError } = await readStdinJson();
   if (parseError) {
+    await logNativeHookCliError(process.cwd(), "native_hook_stdin_parse_error", parseError);
     writeNativeHookJsonStdout({
       decision: "block",
       reason: "OMX native hook received malformed JSON input. Preserve runtime state, inspect the emitting hook payload yourself, and retry with valid JSON.",
@@ -3039,6 +3157,9 @@ export async function runCodexNativeHookCli(): Promise<void> {
     if (isStopDispatchFailureTestTrigger(payload)) {
       throw new Error("test-induced Stop dispatch failure");
     }
+    if (isDispatchFailureTestTrigger()) {
+      throw new Error("test-induced dispatch failure");
+    }
 
     const result = await dispatchCodexNativeHook(payload);
     if (result.outputJson) {
@@ -3047,25 +3168,19 @@ export async function runCodexNativeHookCli(): Promise<void> {
       writeNativeHookJsonStdout({});
     }
   } catch (error) {
-    if (readHookEventName(payload) !== "Stop") {
-      throw error;
+    const cwd = safeString(payload.cwd).trim() || process.cwd();
+    await logNativeHookCliError(cwd, "native_hook_dispatch_error", error, payload);
+    if (readHookEventName(payload) === "Stop") {
+      writeNativeHookJsonStdout(buildStopDispatchFailureOutput(error));
+    } else {
+      process.exitCode = 1;
     }
-    process.stderr.write(
-      `[omx] codex-native Stop hook dispatch failed: ${
-        error instanceof Error ? error.message : String(error)
-      }\n`,
-    );
-    writeNativeHookJsonStdout(buildStopDispatchFailureOutput(error));
   }
 }
 
 if (isCodexNativeHookMainModule(import.meta.url, process.argv[1])) {
   runCodexNativeHookCli().catch((error) => {
-    process.stderr.write(
-      `[omx] codex-native-hook failed: ${
-        error instanceof Error ? error.message : String(error)
-      }\n`,
-    );
     process.exitCode = 1;
+    void logNativeHookCliError(process.cwd(), "native_hook_fatal_error", error);
   });
 }

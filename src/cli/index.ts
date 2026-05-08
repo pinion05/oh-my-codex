@@ -4,7 +4,7 @@
  */
 
 import { execFileSync, spawn } from "child_process";
-import { basename, dirname, join } from "path";
+import { basename, dirname, join, posix, win32 } from "path";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
 import { copyFile, cp, lstat, mkdir, readdir, rm, symlink } from "fs/promises";
 import { constants as osConstants, homedir } from "os";
@@ -68,7 +68,15 @@ export {
   resolveCodexHomeForLaunch,
   resolveProjectLocalCodexHomeForLaunch,
 } from "./codex-home.js";
-import { SKILL_ACTIVE_STATE_MODE, syncCanonicalSkillStateForMode } from "../state/skill-active.js";
+import {
+  SKILL_ACTIVE_STATE_MODE,
+  extractSessionIdFromInitializedStatePath,
+  getSkillActiveStatePaths,
+  listActiveSkills,
+  readSkillActiveState,
+  syncCanonicalSkillStateForMode,
+  type SkillActiveStateLike,
+} from "../state/skill-active.js";
 import { isTrackedWorkflowMode } from "../state/workflow-transition.js";
 import { maybeCheckAndPromptUpdate, runImmediateUpdate } from "./update.js";
 import { maybePromptGithubStar } from "./star-prompt.js";
@@ -142,6 +150,7 @@ import {
   type ParseNotifyTempContractResult,
 } from "../notifications/temp-contract.js";
 import { execInjectCommand } from "../exec/followup.js";
+import { imagegenCommand } from "../imagegen/continuation.js";
 
 export function resolveNotifyFallbackWatcherScript(pkgRoot = getPackageRoot()): string {
   return resolveDistScript(pkgRoot, "notify-fallback-watcher.js");
@@ -167,6 +176,8 @@ Usage:
   omx exec      Run codex exec non-interactively with OMX AGENTS/overlay injection
   omx exec inject <session-id> --prompt <text>
                 Queue audited follow-up instructions for a running non-interactive exec job
+  omx imagegen continuation <session-id> --artifact <name>
+                Queue a Stop-hook continuation for built-in image generation turns
   omx setup     Install skills, prompts, MCP servers, and scope-specific AGENTS.md
                 (user scope prompts for legacy vs plugin skill delivery when needed)
   omx update    Check npm now, update the global install immediately, then refresh setup
@@ -255,16 +266,16 @@ Options:
                 user | project
 
 Launch policy:
-  OMX_LAUNCH_POLICY=direct|tmux|detached-tmux|auto
-                Choose the default leader launch policy when no CLI policy flag is present
-  unset OMX_LAUNCH_POLICY
-                Return to the auto/default policy (detached tmux on supported interactive terminals)
-  omx --direct --yolo
-                Run this launch without OMX tmux/HUD management
-  OMX_LAUNCH_POLICY=direct omx --yolo
-                Use direct launch from the environment
-  OMX_LAUNCH_POLICY=direct omx --tmux --yolo
-                CLI policy flags override the environment for one launch
+  OMX_LAUNCH_POLICY=auto
+                Use the default policy: detached tmux when supported, direct otherwise
+  OMX_LAUNCH_POLICY=direct
+                Run without OMX tmux/HUD management
+  OMX_LAUNCH_POLICY=tmux
+                Force OMX-managed detached tmux launch
+  OMX_LAUNCH_POLICY=detached-tmux
+                Force OMX-managed detached tmux launch
+  CLI policy flags (--direct/--tmux) override OMX_LAUNCH_POLICY; the last flag before -- wins.
+  Unset or empty OMX_LAUNCH_POLICY returns to auto/default behavior.
   Config files are intentionally not used for launch policy in this release.
 `;
 
@@ -312,6 +323,7 @@ const TMUX_EXTENDED_KEYS_LOCK_STALE_MS = 30_000;
 type CliCommand =
   | "launch"
   | "exec"
+  | "imagegen"
   | "setup"
   | "update"
   | "list"
@@ -354,6 +366,7 @@ const NESTED_HELP_COMMANDS = new Set<CliCommand>([
   "agents-init",
   "deepinit",
   "exec",
+  "imagegen",
   "hooks",
   "list",
   "hud",
@@ -596,9 +609,12 @@ function resolveTmuxExecutableForLaunch(): string {
 
 export interface PreparedCodexHomeForLaunch {
   codexHomeOverride?: string;
+  sqliteHomeOverride?: string;
   projectLocalCodexHomeForCleanup?: string;
   runtimeCodexHomeForCleanup?: string;
 }
+
+export const CODEX_SQLITE_HOME_ENV = "CODEX_SQLITE_HOME";
 
 export function runtimeCodexHomePath(
   cwd: string,
@@ -620,6 +636,10 @@ async function linkOrCopyCodexHomeEntry(source: string, destination: string): Pr
   }
 }
 
+function isCodexSqliteArtifact(entryName: string): boolean {
+  return /^(?:state|logs)_\d+\.sqlite(?:-(?:shm|wal))?$/.test(entryName);
+}
+
 /**
  * Project-scope setup keeps durable Codex config under <repo>/.codex, but the
  * Codex TUI also stores model-availability NUX counters in CODEX_HOME/config.toml.
@@ -638,6 +658,7 @@ export async function prepareRuntimeCodexHomeForProjectLaunch(
   if (!existsSync(projectCodexHome)) return runtimeCodexHome;
 
   for (const entry of await readdir(projectCodexHome, { withFileTypes: true })) {
+    if (isCodexSqliteArtifact(entry.name)) continue;
     const source = join(projectCodexHome, entry.name);
     const destination = join(runtimeCodexHome, entry.name);
     if (entry.name === "config.toml") {
@@ -648,6 +669,15 @@ export async function prepareRuntimeCodexHomeForProjectLaunch(
   }
 
   return runtimeCodexHome;
+}
+
+function resolveProjectSqliteHomeForLaunch(
+  projectCodexHome: string,
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  const configured = env[CODEX_SQLITE_HOME_ENV];
+  if (typeof configured === "string" && configured.trim() !== "") return undefined;
+  return projectCodexHome;
 }
 
 export async function prepareCodexHomeForLaunch(
@@ -664,6 +694,7 @@ export async function prepareCodexHomeForLaunch(
     );
     return {
       codexHomeOverride: runtimeCodexHome,
+      sqliteHomeOverride: resolveProjectSqliteHomeForLaunch(projectLocalCodexHomeForCleanup, env),
       projectLocalCodexHomeForCleanup,
       runtimeCodexHomeForCleanup: runtimeCodexHome,
     };
@@ -968,13 +999,44 @@ export function buildHudPaneCleanupTargets(
   return [...targets];
 }
 
+function isCrossPlatformAbsolutePath(raw: string): boolean {
+  return posix.isAbsolute(raw) || win32.isAbsolute(raw);
+}
+
 export function resolveOmxRootForLaunch(
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
   const raw = env.OMX_ROOT || env.OMX_STATE_ROOT;
   if (typeof raw !== "string" || raw.trim() === "") return undefined;
-  return raw.startsWith("/") ? raw : join(cwd, raw);
+  return isCrossPlatformAbsolutePath(raw) ? raw : join(cwd, raw);
+}
+
+function hasExplicitOmxRootEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+  return [env.OMX_ROOT, env.OMX_STATE_ROOT].some(
+    (value) => typeof value === "string" && value.trim() !== "",
+  );
+}
+
+export function resolveDisposableWorktreeOmxRootForLaunch(
+  ensuredWorktree: { enabled: true; repoRoot: string } | { enabled: false } | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  if (!ensuredWorktree?.enabled) return undefined;
+  if (hasExplicitOmxRootEnv(env)) return undefined;
+  return ensuredWorktree.repoRoot;
+}
+
+function applyDisposableWorktreeOmxRootForLaunch(
+  ensuredWorktree: { enabled: true; repoRoot: string } | { enabled: false } | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  const omxRootOverride = resolveDisposableWorktreeOmxRootForLaunch(
+    ensuredWorktree,
+    env,
+  );
+  if (!omxRootOverride) return;
+  env.OMX_ROOT = omxRootOverride;
 }
 
 export function shouldAutoIsolateMadmaxLaunch(
@@ -1034,6 +1096,7 @@ export async function main(args: string[]): Promise<void> {
   const knownCommands = new Set([
     "launch",
     "exec",
+    "imagegen",
     "setup",
     "update",
     "list",
@@ -1160,6 +1223,9 @@ export async function main(args: string[]): Promise<void> {
         } else {
           await execWithOverlay(launchArgs);
         }
+        break;
+      case "imagegen":
+        await imagegenCommand(args.slice(1));
         break;
       case "sparkshell":
         await sparkshellCommand(args.slice(1));
@@ -1374,6 +1440,7 @@ export async function launchWithHud(args: string[]): Promise<void> {
   );
   let cwd = launchCwd;
   let worktreeDirty = false;
+  let ensuredLaunchWorktree: ReturnType<typeof ensureWorktree> | undefined;
   if (parsedWorktree.mode.enabled) {
     const planned = planWorktreeTarget({
       cwd: launchCwd,
@@ -1381,6 +1448,7 @@ export async function launchWithHud(args: string[]): Promise<void> {
       mode: parsedWorktree.mode,
     });
     const ensured = ensureWorktree(planned, { allowDirtyReuse: true });
+    ensuredLaunchWorktree = ensured;
     if (ensured.enabled) {
       cwd = ensured.worktreePath;
       if (ensured.dirty) {
@@ -1398,6 +1466,8 @@ export async function launchWithHud(args: string[]): Promise<void> {
       }
     }
   }
+  applyDisposableWorktreeOmxRootForLaunch(ensuredLaunchWorktree);
+
   const sessionId = `omx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   try {
     await maybeCheckAndPromptUpdate(cwd);
@@ -1431,6 +1501,7 @@ export async function launchWithHud(args: string[]): Promise<void> {
 
   const preparedCodexHome = await prepareCodexHomeForLaunch(launchCwd, sessionId, process.env);
   const codexHomeOverride = preparedCodexHome.codexHomeOverride;
+  const sqliteHomeOverride = preparedCodexHome.sqliteHomeOverride;
   const projectLocalCodexHomeForCleanup = preparedCodexHome.projectLocalCodexHomeForCleanup;
 
   // ── Phase 1: preLaunch ──────────────────────────────────────────────────
@@ -1455,6 +1526,7 @@ export async function launchWithHud(args: string[]): Promise<void> {
       sessionId,
       workerSparkModel,
       codexHomeOverride,
+      sqliteHomeOverride,
       notifyTempContractRaw,
       effectiveExplicitLaunchPolicy,
       projectLocalCodexHomeForCleanup,
@@ -1482,6 +1554,7 @@ export async function execWithOverlay(args: string[]): Promise<void> {
   );
   let cwd = launchCwd;
   let worktreeDirty = false;
+  let ensuredLaunchWorktree: ReturnType<typeof ensureWorktree> | undefined;
 
   if (parsedWorktree.mode.enabled) {
     const planned = planWorktreeTarget({
@@ -1490,6 +1563,7 @@ export async function execWithOverlay(args: string[]): Promise<void> {
       mode: parsedWorktree.mode,
     });
     const ensured = ensureWorktree(planned, { allowDirtyReuse: true });
+    ensuredLaunchWorktree = ensured;
     if (ensured.enabled) {
       cwd = ensured.worktreePath;
       if (ensured.dirty) {
@@ -1507,6 +1581,8 @@ export async function execWithOverlay(args: string[]): Promise<void> {
       }
     }
   }
+
+  applyDisposableWorktreeOmxRootForLaunch(ensuredLaunchWorktree);
 
   const sessionId = `omx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -1536,6 +1612,7 @@ export async function execWithOverlay(args: string[]): Promise<void> {
 
   const preparedCodexHome = await prepareCodexHomeForLaunch(launchCwd, sessionId, process.env);
   const codexHomeOverride = preparedCodexHome.codexHomeOverride;
+  const sqliteHomeOverride = preparedCodexHome.sqliteHomeOverride;
   const projectLocalCodexHomeForCleanup = preparedCodexHome.projectLocalCodexHomeForCleanup;
 
   try {
@@ -1560,6 +1637,7 @@ export async function execWithOverlay(args: string[]): Promise<void> {
     const codexEnvBase = {
       ...process.env,
       ...(codexHomeOverride ? { CODEX_HOME: codexHomeOverride } : {}),
+      ...(sqliteHomeOverride ? { [CODEX_SQLITE_HOME_ENV]: sqliteHomeOverride } : {}),
       ...(omxRootOverride ? { OMX_ROOT: omxRootOverride } : {}),
     };
     const codexEnv = notifyTempContractRaw
@@ -2469,6 +2547,7 @@ export function buildDetachedSessionBootstrapSteps(
   runtimeCodexHomeForCleanup?: string,
   omxRootOverride?: string,
   env: NodeJS.ProcessEnv = process.env,
+  sqliteHomeOverride?: string,
 ): DetachedSessionTmuxStep[] {
   const detachedLeaderCmd = nativeWindows
     ? "powershell.exe"
@@ -2497,6 +2576,7 @@ export function buildDetachedSessionBootstrapSteps(
     ...(sessionId ? ["-e", `OMX_SESSION_ID=${sessionId}`] : []),
     ...(sessionId ? ["-e", `${OMX_TMUX_HUD_OWNER_ENV}=1`] : []),
     ...(codexHomeOverride ? ["-e", `CODEX_HOME=${codexHomeOverride}`] : []),
+    ...(sqliteHomeOverride ? ["-e", `${CODEX_SQLITE_HOME_ENV}=${sqliteHomeOverride}`] : []),
     ...(omxRootOverride ? ["-e", `OMX_ROOT=${omxRootOverride}`] : []),
     ...(env.OMX_STATE_ROOT ? ["-e", `OMX_STATE_ROOT=${env.OMX_STATE_ROOT}`] : []),
     ...(env.OMXBOX_ACTIVE ? ["-e", `OMXBOX_ACTIVE=${env.OMXBOX_ACTIVE}`] : []),
@@ -2808,6 +2888,56 @@ async function readPostLaunchModeStateFile(
   return { kind: "recoverable" };
 }
 
+function cleanPostLaunchString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function postLaunchUniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+async function scrubPostLaunchRootSkillActiveForSession(
+  cwd: string,
+  sessionId: string,
+  nowIso: string,
+  writeFileFn: typeof import("fs/promises").writeFile,
+  rootStateBeforeCleanup?: SkillActiveStateLike | null,
+): Promise<void> {
+  const normalizedSessionId = cleanPostLaunchString(sessionId);
+  if (!normalizedSessionId) return;
+
+  const { rootPath } = getSkillActiveStatePaths(cwd);
+  const rootState = rootStateBeforeCleanup ?? await readSkillActiveState(rootPath);
+  if (!rootState) return;
+
+  const rootSessionIds = postLaunchUniqueStrings([
+    cleanPostLaunchString(rootState.session_id),
+    cleanPostLaunchString(extractSessionIdFromInitializedStatePath(rootState.initialized_state_path)),
+  ]);
+  const rootBelongsToSession = rootSessionIds.includes(normalizedSessionId);
+  const entries = listActiveSkills(rootState);
+  const keptEntries = entries.filter((entry) => {
+    const entrySessionId = cleanPostLaunchString(entry.session_id);
+    if (entrySessionId) return entrySessionId !== normalizedSessionId;
+    return !rootBelongsToSession;
+  });
+
+  if (keptEntries.length === entries.length && rootState.active !== true) return;
+  if (keptEntries.length === entries.length && !rootBelongsToSession) return;
+
+  const nextRoot = {
+    ...rootState,
+    active: keptEntries.length > 0,
+    skill: keptEntries[0]?.skill ?? (keptEntries.length > 0 ? cleanPostLaunchString(rootState.skill) : ""),
+    phase: keptEntries[0]?.phase ?? (keptEntries.length > 0 ? cleanPostLaunchString(rootState.phase) : "complete"),
+    updated_at: nowIso,
+    active_skills: keptEntries,
+    post_launch_reconciled_at: nowIso,
+    post_launch_reconciliation_reason: "terminal_session_cleanup",
+  };
+  await writeFileFn(rootPath, JSON.stringify(nextRoot, null, 2));
+}
+
 function buildRecoveredPostLaunchModeState(
   mode: string,
   completedAt: string,
@@ -2845,7 +2975,12 @@ export async function cleanupPostLaunchModeStateFiles(
     dependencies.writeFile ?? (await import("fs/promises")).writeFile;
   const writeWarn = dependencies.writeWarn ?? console.warn;
   const now = dependencies.now ?? (() => new Date());
-  const scopedDirs = [getBaseStateDir(cwd), getStateDir(cwd, sessionId)];
+  const scopedDirs = sessionId
+    ? [getStateDir(cwd, sessionId)]
+    : [getBaseStateDir(cwd)];
+  const rootSkillActiveStateBeforeCleanup = sessionId
+    ? await readSkillActiveState(getSkillActiveStatePaths(cwd).rootPath)
+    : null;
 
   for (const stateDir of scopedDirs) {
     const files = await readdir(stateDir).catch(() => [] as string[]);
@@ -2926,6 +3061,22 @@ export async function cleanupPostLaunchModeStateFiles(
           `[omx] postLaunch: failed to update mode state ${path}: ${err instanceof Error ? err.message : err}`,
         );
       }
+    }
+  }
+
+  if (sessionId) {
+    try {
+      await scrubPostLaunchRootSkillActiveForSession(
+        cwd,
+        sessionId,
+        now().toISOString(),
+        writeFile,
+        rootSkillActiveStateBeforeCleanup,
+      );
+    } catch (err) {
+      writeWarn(
+        `[omx] postLaunch: failed to reconcile root skill-active state: ${err instanceof Error ? err.message : err}`,
+      );
     }
   }
 }
@@ -3089,6 +3240,7 @@ function runCodex(
   sessionId: string,
   workerDefaultModel?: string,
   codexHomeOverride?: string,
+  sqliteHomeOverride?: string,
   notifyTempContractRaw?: string | null,
   explicitLaunchPolicy?: CodexLaunchPolicy,
   projectLocalCodexHomeForCleanup?: string,
@@ -3119,6 +3271,7 @@ function runCodex(
   const codexBaseEnv = {
     ...process.env,
     ...(codexHomeOverride ? { CODEX_HOME: codexHomeOverride } : {}),
+    ...(sqliteHomeOverride ? { [CODEX_SQLITE_HOME_ENV]: sqliteHomeOverride } : {}),
     ...(omxRootOverride ? { OMX_ROOT: omxRootOverride } : {}),
   };
   const codexEnvWithSession = {
@@ -3237,6 +3390,7 @@ function runCodex(
         runtimeCodexHomeForCleanup,
         omxRootOverride,
         process.env,
+        sqliteHomeOverride,
       );
       for (const step of bootstrapSteps) {
         const output = execTmuxFileSync(step.args, {

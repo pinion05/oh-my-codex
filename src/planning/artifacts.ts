@@ -7,6 +7,13 @@ import {
   selectLatestPlanningArtifactPath,
   selectMatchingTestSpecsForPrd,
 } from './artifact-names.js';
+import {
+  resolveContextPackHandoffStatus,
+  type ContextPackHandoffStatusSnapshot,
+  type ContextPackRef,
+  type ContextPackRole,
+  type ContextPackStatus,
+} from './context-pack-status.js';
 import { omxPlansDir } from '../utils/paths.js';
 
 const PRD_PATTERN = /^prd-.*\.md$/i;
@@ -14,6 +21,30 @@ const TEST_SPEC_PATTERN = /^test-?spec-.*\.md$/i;
 const DEEP_INTERVIEW_SPEC_PATTERN = /^deep-interview-.*\.md$/i;
 const APPROVED_REPOSITORY_CONTEXT_MAX_CHARS = 4_000;
 const APPROVED_REPOSITORY_CONTEXT_MAX_LINES = 80;
+
+export {
+  REQUIRED_CONTEXT_PACK_ROLES,
+  isApprovedExecutionContextReadyStatus,
+  isApprovedExecutionFollowupReadyStatus,
+  resolveContextPackHandoffState,
+} from './context-pack-status.js';
+export type {
+  ContextPackHandoffStatusSnapshot,
+  ContextPackBaselineState,
+  ContextPackBasisState,
+  ContextPackOutcomeState,
+  ContextPackPackState,
+  ContextPackRef,
+  ContextPackRole,
+  ContextPackRoleCoverageState,
+  ContextPackStatus,
+} from './context-pack-status.js';
+
+interface PlanningArtifactSelectionBase {
+  prdPath: string | null;
+  testSpecPaths: string[];
+  deepInterviewSpecPaths: string[];
+}
 
 export interface PlanningArtifacts {
   plansDir: string;
@@ -33,6 +64,10 @@ export interface ApprovedPlanContext {
   sourcePath: string;
   testSpecPaths: string[];
   deepInterviewSpecPaths: string[];
+  contextPack: ContextPackRef | null;
+  contextPackStatus: ContextPackStatus;
+  missingRequiredContextPackRoles: ContextPackRole[];
+  contextPackIssues: string[];
   repositoryContextSummary?: ApprovedRepositoryContextSummary;
 }
 
@@ -49,6 +84,10 @@ export interface LatestPlanningArtifactSelection {
   prdPath: string | null;
   testSpecPaths: string[];
   deepInterviewSpecPaths: string[];
+  contextPack: ContextPackRef | null;
+  contextPackStatus: ContextPackStatus;
+  missingRequiredContextPackRoles: ContextPackRole[];
+  contextPackIssues: string[];
 }
 
 interface ApprovedExecutionLaunchHintReadOptions {
@@ -101,7 +140,7 @@ export function readPlanningArtifacts(cwd: string): PlanningArtifacts {
 }
 
 export function isPlanningComplete(artifacts: PlanningArtifacts): boolean {
-  const selection = selectLatestPlanningArtifacts(artifacts);
+  const selection = selectPlanningArtifactsBase(artifacts);
   return Boolean(selection.prdPath) && selection.testSpecPaths.length > 0;
 }
 
@@ -130,10 +169,10 @@ function selectDeepInterviewSpecPathsForSlug(paths: readonly string[], slug: str
     .sort(comparePlanningArtifactPaths);
 }
 
-function selectPlanningArtifacts(
+function selectPlanningArtifactsBase(
   artifacts: PlanningArtifacts,
   prdPath?: string,
-): LatestPlanningArtifactSelection {
+): PlanningArtifactSelectionBase {
   const selectedPrdPath = prdPath == null
     ? selectLatestPlanningArtifactPath(artifacts.prdPaths)
     : artifacts.prdPaths.includes(prdPath)
@@ -147,6 +186,21 @@ function selectPlanningArtifacts(
     prdPath: selectedPrdPath,
     testSpecPaths: selectMatchingTestSpecsForPrd(selectedPrdPath, artifacts.testSpecPaths),
     deepInterviewSpecPaths: selectDeepInterviewSpecPathsForSlug(artifacts.deepInterviewSpecPaths, slug),
+  };
+}
+
+function selectPlanningArtifacts(
+  artifacts: PlanningArtifacts,
+  prdPath?: string,
+): LatestPlanningArtifactSelection {
+  const selection = selectPlanningArtifactsBase(artifacts, prdPath);
+  const handoffStatus = resolveContextPackHandoffStatus(artifacts, selection);
+  return {
+    ...selection,
+    contextPack: handoffStatus.contextPack,
+    contextPackStatus: handoffStatus.contextPackStatus,
+    missingRequiredContextPackRoles: handoffStatus.missingRequiredContextPackRoles,
+    contextPackIssues: handoffStatus.contextPackIssues,
   };
 }
 
@@ -205,13 +259,14 @@ function readApprovedRepositoryContextSummary(
 function readApprovedPlanText(
   cwd: string,
   options: ApprovedExecutionLaunchHintReadOptions = {},
+  allowMissingBaseline = false,
 ): { content: string; context: ApprovedPlanContext } | null {
   const artifacts = readPlanningArtifacts(cwd);
-  if (!isPlanningComplete(artifacts)) return null;
-
   const selection = selectPlanningArtifacts(artifacts, options.prdPath);
   const latestPrdPath = selection.prdPath;
-  if (!latestPrdPath || selection.testSpecPaths.length === 0 || !existsSync(latestPrdPath)) return null;
+  if (!latestPrdPath || (!allowMissingBaseline && selection.testSpecPaths.length === 0) || !existsSync(latestPrdPath)) {
+    return null;
+  }
 
   try {
     const content = readFileSync(latestPrdPath, 'utf-8');
@@ -223,6 +278,10 @@ function readApprovedPlanText(
         sourcePath: latestPrdPath,
         testSpecPaths: selection.testSpecPaths,
         deepInterviewSpecPaths: selection.deepInterviewSpecPaths,
+        contextPack: selection.contextPack,
+        contextPackStatus: selection.contextPackStatus,
+        missingRequiredContextPackRoles: selection.missingRequiredContextPackRoles,
+        contextPackIssues: selection.contextPackIssues,
         ...(repositoryContextSummary ? { repositoryContextSummary } : {}),
       },
     };
@@ -239,6 +298,14 @@ export function selectLatestPlanningArtifacts(
 
 export function readLatestPlanningArtifacts(cwd: string): LatestPlanningArtifactSelection {
   return selectLatestPlanningArtifacts(readPlanningArtifacts(cwd));
+}
+
+export function readContextPackHandoffStatus(
+  cwd: string,
+  prdPath?: string,
+): ContextPackHandoffStatusSnapshot {
+  const artifacts = readPlanningArtifacts(cwd);
+  return resolveContextPackHandoffStatus(artifacts, selectPlanningArtifactsBase(artifacts, prdPath));
 }
 
 function extractTeamDagMarkdownHandoff(content: string): string | null {
@@ -263,7 +330,7 @@ export function readTeamDagArtifactResolution(cwd: string): TeamDagArtifactResol
     return { source: 'none', prdPath: null, planSlug: null, warnings: ['planning_incomplete'] };
   }
 
-  const selection = selectLatestPlanningArtifacts(artifacts);
+  const selection = selectPlanningArtifactsBase(artifacts);
   const prdPath = selection.prdPath;
   const planSlug = prdPath ? artifactPathSuffix(prdPath, /^prd-(?<slug>.*)\.md$/i) : null;
   if (!prdPath || !planSlug) {
@@ -365,7 +432,7 @@ export function readApprovedExecutionLaunchHintOutcome(
   mode: 'team' | 'ralph',
   options: ApprovedExecutionLaunchHintReadOptions = {},
 ): ApprovedExecutionLaunchHintOutcome {
-  const approvedPlan = readApprovedPlanText(cwd, options);
+  const approvedPlan = readApprovedPlanText(cwd, options, true);
   if (!approvedPlan) return { status: 'absent' };
 
   const selected = selectLaunchHintMatch(
@@ -412,5 +479,8 @@ export function readApprovedExecutionLaunchHint(
   options: ApprovedExecutionLaunchHintReadOptions = {},
 ): ApprovedExecutionLaunchHint | null {
   const outcome = readApprovedExecutionLaunchHintOutcome(cwd, mode, options);
-  return outcome.status === 'resolved' ? outcome.hint : null;
+  if (outcome.status !== 'resolved' || outcome.hint.contextPackStatus === 'missing-baseline') {
+    return null;
+  }
+  return outcome.hint;
 }

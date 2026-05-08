@@ -36,6 +36,8 @@ jobs:
         with:
           toolchain: stable
           components: clippy
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@v2
       - name: Run clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
@@ -50,6 +52,8 @@ jobs:
         with:
           toolchain: stable
           components: llvm-tools-preview
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@v2
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Run Rust tests with coverage summaries
@@ -213,7 +217,7 @@ jobs:
     name: Coverage Gate (Team Critical)
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    needs: [typecheck, build-dist]
+    needs: [build-dist]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v6
@@ -256,7 +260,7 @@ jobs:
     name: Ralph Persistence Gate
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [typecheck, build-dist]
+    needs: [build-dist]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v6
@@ -276,7 +280,7 @@ jobs:
     name: Build (Full Source Build)
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    needs: [rustfmt, clippy, lint, typecheck, build-dist]
+    needs: [build-dist]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v6
@@ -287,6 +291,8 @@ jobs:
         uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: stable
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@v2
       - run: npm ci
       - name: Download prebuilt dist artifact
         uses: actions/download-artifact@v8

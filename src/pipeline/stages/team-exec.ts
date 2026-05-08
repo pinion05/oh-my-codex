@@ -6,7 +6,6 @@
  * canonical OMX execution surface.
  */
 
-import { readFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve } from 'node:path';
 import type { PipelineStage, StageContext, StageResult } from '../types.js';
 import { buildRepoAwareTeamExecutionPlan, type TeamDecompositionMetadata } from '../../team/repo-aware-decomposition.js';
@@ -16,11 +15,16 @@ import {
   resolveAvailableAgentTypes,
 } from '../../team/followup-planner.js';
 import {
-  decodeApprovedExecutionQuotedValue,
-  readLatestPlanningArtifacts,
+  isApprovedExecutionContextReadyStatus,
+  isApprovedExecutionFollowupReadyStatus,
+  readApprovedExecutionLaunchHintOutcome,
   readPlanningArtifacts,
   type PlanningArtifacts,
 } from '../../planning/artifacts.js';
+import {
+  buildApprovedTeamExecutionBinding,
+  type ApprovedTeamExecutionBinding,
+} from '../../team/approved-execution.js';
 import { packageRoot, sameFilePath } from '../../utils/paths.js';
 
 export interface TeamExecStageOptions {
@@ -36,8 +40,6 @@ export interface TeamExecStageOptions {
   /** Additional environment variables for worker launch. */
   extraEnv?: Record<string, string>;
 }
-
-const APPROVED_TEAM_LAUNCH_PATTERN = /(?<command>(?:omx\s+team|\$team)\s+(?<ralph>ralph\s+)?(?<count>\d+)(?::(?<role>[a-z][a-z0-9-]*))?\s+(?<task>"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'))/gi;
 
 function resolveRequestedTask(ctx: StageContext, ralplanArtifacts?: Record<string, unknown>): string {
   const ralplanTask = typeof ralplanArtifacts?.task === 'string' ? ralplanArtifacts.task.trim() : '';
@@ -108,12 +110,27 @@ function readRuntimeLatestPlanningSelection(
       : '';
     if (!draftPlanPath) continue;
     const resolvedDraftPlanPath = resolvePlanningPrdPath(artifacts, cwd, draftPlanPath).matchedPath;
+    const testSpecPaths = resolvedDraftPlanPath ? matchingTestSpecPathsForPrd(artifacts, resolvedDraftPlanPath) : [];
+    if (!resolvedDraftPlanPath || testSpecPaths.length === 0) continue;
     return {
       prdPath: resolvedDraftPlanPath,
-      testSpecPaths: resolvedDraftPlanPath ? matchingTestSpecPathsForPrd(artifacts, resolvedDraftPlanPath) : [],
+      testSpecPaths,
     };
   }
   return null;
+}
+
+function readLatestApprovedPlanningSelection(
+  artifacts: PlanningArtifacts,
+): { prdPath: string | null; testSpecPaths: string[] } {
+  for (let index = artifacts.prdPaths.length - 1; index >= 0; index -= 1) {
+    const prdPath = artifacts.prdPaths[index];
+    const testSpecPaths = matchingTestSpecPathsForPrd(artifacts, prdPath);
+    if (testSpecPaths.length > 0) {
+      return { prdPath, testSpecPaths };
+    }
+  }
+  return { prdPath: null, testSpecPaths: [] };
 }
 
 function resolveApprovedTeamPlanPath(
@@ -123,12 +140,22 @@ function resolveApprovedTeamPlanPath(
 ): string {
   const artifacts = readPlanningArtifacts(cwd);
   const resolvedLatestPlanPath = resolvePlanningPrdPath(artifacts, cwd, latestPlanPath);
-  const selection = readRuntimeLatestPlanningSelection(artifacts, cwd, ralplanArtifacts) ?? readLatestPlanningArtifacts(cwd);
+  const latestPlanTestSpecPaths = resolvedLatestPlanPath.matchedPath
+    ? matchingTestSpecPathsForPrd(artifacts, resolvedLatestPlanPath.matchedPath)
+    : [];
+  if (!resolvedLatestPlanPath.matchedPath) {
+    throw new Error(`team_exec_approved_handoff_missing:${resolvedLatestPlanPath.fallbackPath}`);
+  }
+  if (latestPlanTestSpecPaths.length === 0) {
+    return resolvedLatestPlanPath.matchedPath;
+  }
+  const selection = readRuntimeLatestPlanningSelection(artifacts, cwd, ralplanArtifacts)
+    ?? readLatestApprovedPlanningSelection(artifacts);
   const selectedPrdPath = selection.prdPath
     ? resolvePlanningPrdPath(artifacts, cwd, selection.prdPath).matchedPath
     : null;
 
-  if (!selectedPrdPath || selection.testSpecPaths.length === 0 || !resolvedLatestPlanPath.matchedPath) {
+  if (!selectedPrdPath) {
     throw new Error(`team_exec_approved_handoff_missing:${resolvedLatestPlanPath.fallbackPath}`);
   }
   if (selectedPrdPath !== resolvedLatestPlanPath.matchedPath) {
@@ -138,43 +165,46 @@ function resolveApprovedTeamPlanPath(
   return selectedPrdPath;
 }
 
-function resolveApprovedTeamTaskFromPlanPath(
+function resolveApprovedTeamLaunchFromPlanPath(
   cwd: string,
   latestPlanPath: string,
   ralplanArtifacts?: Record<string, unknown>,
-): string {
+): { task: string; approvedExecution: ApprovedTeamExecutionBinding | null } {
   const approvedPlanPath = resolveApprovedTeamPlanPath(cwd, latestPlanPath, ralplanArtifacts);
-  let content = '';
-  try {
-    content = readFileSync(approvedPlanPath, 'utf-8');
-  } catch {
-    throw new Error(`team_exec_approved_handoff_missing:${approvedPlanPath}`);
-  }
-
-  const matches = [...content.matchAll(APPROVED_TEAM_LAUNCH_PATTERN)];
-  if (matches.length === 0) {
-    throw new Error(`team_exec_approved_handoff_missing:${approvedPlanPath}`);
-  }
-  if (matches.length > 1) {
+  const approvedHintOutcome = readApprovedExecutionLaunchHintOutcome(cwd, 'team', {
+    prdPath: approvedPlanPath,
+  });
+  if (approvedHintOutcome.status === 'ambiguous') {
     throw new Error(`team_exec_approved_handoff_ambiguous:${approvedPlanPath}`);
   }
-
-  const task = matches[0]?.groups?.task ? decodeApprovedExecutionQuotedValue(matches[0].groups.task) : null;
-  if (!task) {
+  if (approvedHintOutcome.status !== 'resolved') {
     throw new Error(`team_exec_approved_handoff_missing:${approvedPlanPath}`);
   }
-  return task;
+  if (!isApprovedExecutionFollowupReadyStatus(approvedHintOutcome.hint.contextPackStatus)) {
+    throw new Error(
+      `team_exec_approved_handoff_nonready:${approvedHintOutcome.hint.contextPackStatus}:${approvedPlanPath}`,
+    );
+  }
+  return {
+    task: approvedHintOutcome.hint.task,
+    approvedExecution: isApprovedExecutionContextReadyStatus(approvedHintOutcome.hint.contextPackStatus)
+      ? buildApprovedTeamExecutionBinding(approvedHintOutcome.hint)
+      : null,
+  };
 }
 
-function resolveTeamExecTask(ctx: StageContext, ralplanArtifacts?: Record<string, unknown>): string {
+function resolveTeamExecLaunch(
+  ctx: StageContext,
+  ralplanArtifacts?: Record<string, unknown>,
+): { task: string; approvedExecution: ApprovedTeamExecutionBinding | null } {
   const requestedTask = resolveRequestedTask(ctx, ralplanArtifacts);
   const latestPlanPath = typeof ralplanArtifacts?.latestPlanPath === 'string'
     ? ralplanArtifacts.latestPlanPath.trim()
     : '';
   if (!latestPlanPath) {
-    return requestedTask;
+    return { task: requestedTask, approvedExecution: null };
   }
-  return resolveApprovedTeamTaskFromPlanPath(ctx.cwd, latestPlanPath, ralplanArtifacts);
+  return resolveApprovedTeamLaunchFromPlanPath(ctx.cwd, latestPlanPath, ralplanArtifacts);
 }
 
 interface BuildTeamInstructionOptions {
@@ -199,10 +229,12 @@ interface TeamRuntimeCliTaskInput {
 
 interface TeamRuntimeCliLaunchInput {
   teamName: string;
+  task: string;
   workerCount: number;
   agentType: string;
   tasks: TeamRuntimeCliTaskInput[];
   cwd: string;
+  approvedExecution: ApprovedTeamExecutionBinding | null;
   decompositionMetadata?: TeamDecompositionMetadata;
 }
 
@@ -236,6 +268,7 @@ function buildTeamRuntimeCliLaunchInput(descriptor: TeamExecDescriptor): TeamRun
   });
   return {
     teamName: parsed.teamName,
+    task: descriptor.task,
     workerCount: executionPlan.workerCount,
     agentType: descriptor.agentType,
     tasks: executionPlan.tasks.map(({
@@ -268,6 +301,7 @@ function buildTeamRuntimeCliLaunchInput(descriptor: TeamExecDescriptor): TeamRun
       ...(symbolic_id ? { symbolic_id } : {}),
     })),
     cwd: descriptor.cwd,
+    approvedExecution: descriptor.approvedExecution,
     ...(executionPlan.metadata ? { decompositionMetadata: executionPlan.metadata } : {}),
   };
 }
@@ -294,7 +328,8 @@ export function createTeamExecStage(options: TeamExecStageOptions = {}): Pipelin
         const ralplanArtifacts = typeof ctx.artifacts['ralplan'] === 'object' && ctx.artifacts['ralplan'] !== null
           ? ctx.artifacts['ralplan'] as Record<string, unknown>
           : undefined;
-        const task = resolveTeamExecTask(ctx, ralplanArtifacts);
+        const launch = resolveTeamExecLaunch(ctx, ralplanArtifacts);
+        const task = launch.task;
         const availableAgentTypes = await resolveAvailableAgentTypes(ctx.cwd);
         const staffingPlan = buildFollowupStaffingPlan('team', task, availableAgentTypes, {
           workerCount,
@@ -311,6 +346,7 @@ export function createTeamExecStage(options: TeamExecStageOptions = {}): Pipelin
           useWorktrees: options.useWorktrees ?? false,
           cwd: ctx.cwd,
           extraEnv: options.extraEnv,
+          approvedExecution: launch.approvedExecution,
         };
 
         return {
@@ -353,6 +389,7 @@ export interface TeamExecDescriptor {
   staffingPlan: ReturnType<typeof buildFollowupStaffingPlan>;
   useWorktrees: boolean;
   cwd: string;
+  approvedExecution: ApprovedTeamExecutionBinding | null;
   extraEnv?: Record<string, string>;
 }
 

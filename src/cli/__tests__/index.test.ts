@@ -39,6 +39,8 @@ import {
   resolveProjectLocalCodexHomeForLaunch,
   shouldAutoIsolateMadmaxLaunch,
   createMadmaxIsolatedRoot,
+  resolveOmxRootForLaunch,
+  resolveDisposableWorktreeOmxRootForLaunch,
   prepareCodexHomeForLaunch,
   runtimeCodexHomePath,
   buildDetachedSessionBootstrapSteps,
@@ -64,6 +66,7 @@ import {
   resolveNativeSessionName,
   releaseTmuxExtendedKeysLease,
   withTmuxExtendedKeys,
+  CODEX_SQLITE_HOME_ENV,
 } from "../index.js";
 import { ensureReusableNodeModules } from "../../utils/repo-deps.js";
 import { readAllState } from "../../hud/state.js";
@@ -132,6 +135,96 @@ describe("madmax state isolation", () => {
       await rm(wd, { recursive: true, force: true });
       await rm(runs, { recursive: true, force: true });
     }
+  });
+});
+
+describe("resolveOmxRootForLaunch", () => {
+  it("preserves POSIX absolute OMX_ROOT", () => {
+    assert.equal(
+      resolveOmxRootForLaunch("/repo", { OMX_ROOT: "/var/tmp/omx" }),
+      "/var/tmp/omx",
+    );
+  });
+
+  it("preserves Windows drive-letter absolute OMX_ROOT", () => {
+    assert.equal(
+      resolveOmxRootForLaunch("/repo", { OMX_ROOT: "C:\\Users\\me\\omx" }),
+      "C:\\Users\\me\\omx",
+    );
+  });
+
+  it("preserves Windows drive-letter absolute OMX_STATE_ROOT", () => {
+    assert.equal(
+      resolveOmxRootForLaunch("/repo", { OMX_STATE_ROOT: "D:\\omx-state" }),
+      "D:\\omx-state",
+    );
+  });
+
+  it("preserves UNC absolute OMX_ROOT", () => {
+    assert.equal(
+      resolveOmxRootForLaunch("/repo", { OMX_ROOT: "\\\\server\\share\\omx" }),
+      "\\\\server\\share\\omx",
+    );
+  });
+
+  it("joins relative OMX_ROOT to cwd", () => {
+    assert.equal(
+      resolveOmxRootForLaunch("/repo", { OMX_ROOT: "relative/omx" }),
+      join("/repo", "relative/omx"),
+    );
+  });
+
+  it("returns undefined for blank OMX_ROOT and OMX_STATE_ROOT", () => {
+    assert.equal(
+      resolveOmxRootForLaunch("/repo", { OMX_ROOT: "  ", OMX_STATE_ROOT: "" }),
+      undefined,
+    );
+  });
+
+  it("prefers OMX_ROOT over OMX_STATE_ROOT", () => {
+    assert.equal(
+      resolveOmxRootForLaunch("/repo", {
+        OMX_ROOT: "C:\\Users\\me\\root",
+        OMX_STATE_ROOT: "/state-root",
+      }),
+      "C:\\Users\\me\\root",
+    );
+  });
+});
+
+describe("disposable worktree state root resolution", () => {
+  it("uses the source repo root for launch worktrees when no explicit root is set", () => {
+    assert.equal(
+      resolveDisposableWorktreeOmxRootForLaunch(
+        { enabled: true, repoRoot: "/repo" },
+        {},
+      ),
+      "/repo",
+    );
+  });
+
+  it("preserves explicit OMX_ROOT and OMX_STATE_ROOT precedence", () => {
+    assert.equal(
+      resolveDisposableWorktreeOmxRootForLaunch(
+        { enabled: true, repoRoot: "/repo" },
+        { OMX_ROOT: "/explicit" },
+      ),
+      undefined,
+    );
+    assert.equal(
+      resolveDisposableWorktreeOmxRootForLaunch(
+        { enabled: true, repoRoot: "/repo" },
+        { OMX_STATE_ROOT: "/state-root" },
+      ),
+      undefined,
+    );
+  });
+
+  it("does not affect non-worktree launches", () => {
+    assert.equal(
+      resolveDisposableWorktreeOmxRootForLaunch({ enabled: false }, {}),
+      undefined,
+    );
   });
 });
 
@@ -587,11 +680,11 @@ describe("cleanupPostLaunchModeStateFiles", () => {
 
     await mkdir(sessionStateDir, { recursive: true });
     await writeFile(
-      join(stateDir, "autopilot-state.json"),
+      join(sessionStateDir, "autopilot-state.json"),
       JSON.stringify({ active: true, mode: "autopilot" }, null, 2),
       "utf-8",
     );
-    await writeFile(join(stateDir, "deep-interview-state.json"), "", "utf-8");
+    await writeFile(join(sessionStateDir, "deep-interview-state.json"), "", "utf-8");
     await writeFile(join(sessionStateDir, "ralph-state.json"), partialState, "utf-8");
 
     await cleanupPostLaunchModeStateFiles(wd, sessionId, {
@@ -599,10 +692,10 @@ describe("cleanupPostLaunchModeStateFiles", () => {
     });
 
     const autopilot = JSON.parse(
-      await readFile(join(stateDir, "autopilot-state.json"), "utf-8"),
+      await readFile(join(sessionStateDir, "autopilot-state.json"), "utf-8"),
     ) as Record<string, unknown>;
     const deepInterview = JSON.parse(
-      await readFile(join(stateDir, "deep-interview-state.json"), "utf-8"),
+      await readFile(join(sessionStateDir, "deep-interview-state.json"), "utf-8"),
     ) as Record<string, unknown>;
     const ralph = JSON.parse(
       await readFile(join(sessionStateDir, "ralph-state.json"), "utf-8"),
@@ -638,19 +731,54 @@ describe("cleanupPostLaunchModeStateFiles", () => {
     assert.deepEqual(warnings, []);
   });
 
+  it("does not cancel root mode state during session-scoped postLaunch cleanup", async () => {
+    const wd = await mkdtemp(join(tmpdir(), "omx-postlaunch-root-preserve-"));
+    const sessionId = "sess-postlaunch-root-preserve";
+    const stateDir = join(wd, ".omx", "state");
+    const sessionStateDir = join(stateDir, "sessions", sessionId);
+    await mkdir(sessionStateDir, { recursive: true });
+    await writeFile(
+      join(stateDir, "ralph-state.json"),
+      JSON.stringify({ active: true, mode: "ralph", current_phase: "executing" }, null, 2),
+      "utf-8",
+    );
+    await writeFile(
+      join(sessionStateDir, "ralplan-state.json"),
+      JSON.stringify({ active: true, mode: "ralplan", current_phase: "planning" }, null, 2),
+      "utf-8",
+    );
+
+    try {
+      await cleanupPostLaunchModeStateFiles(wd, sessionId);
+
+      const rootRalph = JSON.parse(
+        await readFile(join(stateDir, "ralph-state.json"), "utf-8"),
+      ) as Record<string, unknown>;
+      const sessionRalplan = JSON.parse(
+        await readFile(join(sessionStateDir, "ralplan-state.json"), "utf-8"),
+      ) as Record<string, unknown>;
+      assert.equal(rootRalph.active, true);
+      assert.equal(sessionRalplan.active, false);
+      assert.equal(sessionRalplan.current_phase, "cancelled");
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
   it("retries a transient parse failure before cancelling the rewritten mode state", async () => {
     const wd = await mkdtemp(join(tmpdir(), "omx-postlaunch-mode-retry-"));
     const sessionId = "sess-postlaunch-retry";
     const stateDir = join(wd, ".omx", "state");
-    const statePath = join(stateDir, "ralph-state.json");
+    const sessionStateDir = join(stateDir, "sessions", sessionId);
+    const statePath = join(sessionStateDir, "ralph-state.json");
     const writes: Array<{ path: string; content: string }> = [];
     const validState = JSON.stringify({ active: true, mode: "ralph" }, null, 2);
     let reads = 0;
 
-    await mkdir(stateDir, { recursive: true });
+    await mkdir(sessionStateDir, { recursive: true });
 
     const mockReaddir = (async (dir: unknown, _options: unknown) => (
-      String(dir) === stateDir ? ["ralph-state.json"] : []
+      String(dir) === sessionStateDir ? ["ralph-state.json"] : []
     )) as unknown as typeof fsReaddir;
     const mockReadFile = (async (path: unknown, _options: unknown) => {
         assert.equal(String(path), statePath);
@@ -685,13 +813,14 @@ describe("cleanupPostLaunchModeStateFiles", () => {
     const wd = await mkdtemp(join(tmpdir(), "omx-postlaunch-mode-malformed-"));
     const sessionId = "sess-postlaunch-malformed";
     const stateDir = join(wd, ".omx", "state");
+    const sessionStateDir = join(stateDir, "sessions", sessionId);
     const warnings: string[] = [];
     const malformedState = '{\n  "active": true,\n}\n';
 
-    await mkdir(stateDir, { recursive: true });
-    await writeFile(join(stateDir, "ralph-state.json"), malformedState, "utf-8");
+    await mkdir(sessionStateDir, { recursive: true });
+    await writeFile(join(sessionStateDir, "ralph-state.json"), malformedState, "utf-8");
     await writeFile(
-      join(stateDir, "ultrawork-state.json"),
+      join(sessionStateDir, "ultrawork-state.json"),
       JSON.stringify({ active: true, mode: "ultrawork" }, null, 2),
       "utf-8",
     );
@@ -701,7 +830,7 @@ describe("cleanupPostLaunchModeStateFiles", () => {
     });
 
     const ultrawork = JSON.parse(
-      await readFile(join(stateDir, "ultrawork-state.json"), "utf-8"),
+      await readFile(join(sessionStateDir, "ultrawork-state.json"), "utf-8"),
     ) as Record<string, unknown>;
     assert.equal(ultrawork.active, false);
     assert.equal(typeof ultrawork.completed_at, "string");
@@ -713,9 +842,102 @@ describe("cleanupPostLaunchModeStateFiles", () => {
       assert.equal(canonical.active, false);
       assert.deepEqual(canonical.active_skills, []);
     }
-    assert.equal(await readFile(join(stateDir, "ralph-state.json"), "utf-8"), malformedState);
+    assert.equal(await readFile(join(sessionStateDir, "ralph-state.json"), "utf-8"), malformedState);
     assert.equal(warnings.length, 1);
     assert.match(warnings[0] ?? "", /skipped malformed mode state .*ralph-state\.json/);
+  });
+
+  it("reconciles root skill-active entries for the finished terminal session", async () => {
+    const wd = await mkdtemp(join(tmpdir(), "omx-postlaunch-root-skill-active-"));
+    const sessionId = "sess-terminal-autopilot";
+    const otherSessionId = "sess-other";
+    const stateDir = join(wd, ".omx", "state");
+    const sessionStateDir = join(stateDir, "sessions", sessionId);
+
+    try {
+      await mkdir(sessionStateDir, { recursive: true });
+      await writeFile(
+        join(stateDir, "skill-active-state.json"),
+        JSON.stringify({
+          version: 1,
+          active: true,
+          skill: "autopilot",
+          phase: "ralph",
+          session_id: sessionId,
+          initialized_state_path: `.omx/state/sessions/${sessionId}/autopilot-state.json`,
+          active_skills: [
+            { skill: "autopilot", phase: "ralph", active: true, session_id: sessionId },
+            { skill: "team", phase: "running", active: true, session_id: otherSessionId },
+          ],
+        }, null, 2),
+        "utf-8",
+      );
+
+      await cleanupPostLaunchModeStateFiles(wd, sessionId);
+
+      const rootCanonical = JSON.parse(
+        await readFile(join(stateDir, "skill-active-state.json"), "utf-8"),
+      ) as { active?: boolean; active_skills?: Array<{ skill?: string; session_id?: string }> };
+      assert.equal(rootCanonical.active, true);
+      assert.deepEqual(rootCanonical.active_skills, [
+        { skill: "team", phase: "running", active: true, session_id: otherSessionId },
+      ]);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves other-session active skills when session mode cleanup syncs before root scrub", async () => {
+    const wd = await mkdtemp(join(tmpdir(), "omx-postlaunch-mode-root-skill-active-"));
+    const sessionId = "sess-terminal-autopilot";
+    const otherSessionId = "sess-other-team";
+    const stateDir = join(wd, ".omx", "state");
+    const sessionStateDir = join(stateDir, "sessions", sessionId);
+
+    try {
+      await mkdir(sessionStateDir, { recursive: true });
+      await writeFile(
+        join(stateDir, "skill-active-state.json"),
+        JSON.stringify({
+          version: 1,
+          active: true,
+          skill: "autopilot",
+          phase: "ralph",
+          session_id: sessionId,
+          initialized_state_path: `.omx/state/sessions/${sessionId}/autopilot-state.json`,
+          active_skills: [
+            { skill: "autopilot", phase: "ralph", active: true, session_id: sessionId },
+            { skill: "team", phase: "running", active: true, session_id: otherSessionId },
+          ],
+        }, null, 2),
+        "utf-8",
+      );
+      await writeFile(
+        join(sessionStateDir, "autopilot-state.json"),
+        JSON.stringify({ active: true, mode: "autopilot", current_phase: "ralph" }, null, 2),
+        "utf-8",
+      );
+
+      await cleanupPostLaunchModeStateFiles(wd, sessionId);
+
+      const autopilotState = JSON.parse(
+        await readFile(join(sessionStateDir, "autopilot-state.json"), "utf-8"),
+      ) as Record<string, unknown>;
+      assert.equal(autopilotState.active, false);
+      assert.equal(autopilotState.current_phase, "cancelled");
+
+      const rootCanonical = JSON.parse(
+        await readFile(join(stateDir, "skill-active-state.json"), "utf-8"),
+      ) as { active?: boolean; skill?: string; phase?: string; active_skills?: Array<Record<string, unknown>> };
+      assert.equal(rootCanonical.active, true);
+      assert.equal(rootCanonical.skill, "team");
+      assert.equal(rootCanonical.phase, "running");
+      assert.deepEqual(rootCanonical.active_skills, [
+        { skill: "team", phase: "running", active: true, session_id: otherSessionId },
+      ]);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
   });
 
   it("clears canonical skill-active entries during cleanup and hides them from HUD/overlay readers", async () => {
@@ -1194,13 +1416,17 @@ describe("resolveCliInvocation", () => {
     assert.match(HELP, /omx update\s+Check npm now, update the global install immediately, then refresh setup/);
   });
 
-  it("advertises direct launch policy controls in top-level help", () => {
+  it("advertises concise launch policy controls in top-level help", () => {
     assert.match(HELP, /--direct\s+Launch the interactive leader directly/);
-    assert.match(HELP, /OMX_LAUNCH_POLICY=direct\|tmux\|detached-tmux\|auto/);
-    assert.match(HELP, /unset OMX_LAUNCH_POLICY/);
-    assert.match(HELP, /omx --direct --yolo/);
-    assert.match(HELP, /OMX_LAUNCH_POLICY=direct omx --tmux --yolo/);
+    assert.match(HELP, /OMX_LAUNCH_POLICY=auto[\s\S]*Use the default policy/);
+    assert.match(HELP, /OMX_LAUNCH_POLICY=direct[\s\S]*Run without OMX tmux\/HUD management/);
+    assert.match(HELP, /OMX_LAUNCH_POLICY=tmux[\s\S]*Force OMX-managed detached tmux launch/);
+    assert.match(HELP, /OMX_LAUNCH_POLICY=detached-tmux[\s\S]*Force OMX-managed detached tmux launch/);
+    assert.match(HELP, /CLI policy flags \(--direct\/--tmux\) override OMX_LAUNCH_POLICY/);
+    assert.match(HELP, /Unset or empty OMX_LAUNCH_POLICY returns to auto\/default behavior/);
     assert.match(HELP, /Config files are intentionally not used/);
+    assert.doesNotMatch(HELP, /OMX_LAUNCH_POLICY=direct\|tmux\|detached-tmux\|auto/);
+    assert.doesNotMatch(HELP, /OMX_LAUNCH_POLICY=direct omx --tmux --yolo/);
   });
 });
 
@@ -1424,12 +1650,16 @@ describe("project launch scope helpers", () => {
       ].join("\n");
       await writeFile(configPath, originalConfig);
       await writeFile(join(projectCodexHome, "agents", "planner.toml"), 'name = "planner"\n');
+      await writeFile(join(projectCodexHome, "state_5.sqlite"), "state db placeholder");
+      await writeFile(join(projectCodexHome, "state_5.sqlite-wal"), "state db wal placeholder");
+      await writeFile(join(projectCodexHome, "logs_2.sqlite-shm"), "logs db shm placeholder");
       const beforeStat = await stat(configPath);
 
       const prepared = await prepareCodexHomeForLaunch(wd, "session-2033", {});
       const runtimeCodexHome = runtimeCodexHomePath(wd, "session-2033");
 
       assert.equal(prepared.codexHomeOverride, runtimeCodexHome);
+      assert.equal(prepared.sqliteHomeOverride, projectCodexHome);
       assert.equal(prepared.projectLocalCodexHomeForCleanup, projectCodexHome);
       assert.equal(prepared.runtimeCodexHomeForCleanup, runtimeCodexHome);
       assert.equal(await readFile(join(runtimeCodexHome, "config.toml"), "utf-8"), originalConfig);
@@ -1437,6 +1667,9 @@ describe("project launch scope helpers", () => {
         await readFile(join(runtimeCodexHome, "agents", "planner.toml"), "utf-8"),
         'name = "planner"\n',
       );
+      assert.equal(existsSync(join(runtimeCodexHome, "state_5.sqlite")), false);
+      assert.equal(existsSync(join(runtimeCodexHome, "state_5.sqlite-wal")), false);
+      assert.equal(existsSync(join(runtimeCodexHome, "logs_2.sqlite-shm")), false);
 
       await writeFile(
         join(runtimeCodexHome, "config.toml"),
@@ -1502,8 +1735,31 @@ describe("project launch scope helpers", () => {
       });
 
       assert.equal(prepared.codexHomeOverride, "/tmp/explicit-codex-home");
+      assert.equal(prepared.sqliteHomeOverride, undefined);
       assert.equal(prepared.projectLocalCodexHomeForCleanup, undefined);
       assert.equal(prepared.runtimeCodexHomeForCleanup, undefined);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it("respects explicit CODEX_SQLITE_HOME for project-scope launches", async () => {
+    const wd = await mkdtemp(join(tmpdir(), "omx-launch-sqlite-home-"));
+    try {
+      await mkdir(join(wd, ".omx"), { recursive: true });
+      await mkdir(join(wd, ".codex"), { recursive: true });
+      await writeFile(
+        join(wd, ".omx", "setup-scope.json"),
+        JSON.stringify({ scope: "project" }),
+      );
+      await writeFile(join(wd, ".codex", "config.toml"), 'model = "gpt-5.5"\n');
+
+      const prepared = await prepareCodexHomeForLaunch(wd, "session-explicit-sqlite", {
+        [CODEX_SQLITE_HOME_ENV]: "/tmp/explicit-sqlite-home",
+      });
+
+      assert.equal(prepared.codexHomeOverride, runtimeCodexHomePath(wd, "session-explicit-sqlite"));
+      assert.equal(prepared.sqliteHomeOverride, undefined);
     } finally {
       await rm(wd, { recursive: true, force: true });
     }
@@ -1981,6 +2237,32 @@ describe("detached tmux new-session sequencing", () => {
     assert.equal(
       newSession!.args.includes("-e") &&
         newSession!.args.some((arg) => arg === "CODEX_HOME=/tmp/project/.codex"),
+      true,
+    );
+  });
+
+  it("buildDetachedSessionBootstrapSteps forwards CODEX_SQLITE_HOME override to detached tmux session", () => {
+    const steps = buildDetachedSessionBootstrapSteps(
+      "omx-demo",
+      "/tmp/project",
+      "'codex' '--model' 'gpt-5'",
+      "'node' '/tmp/omx.js' 'hud' '--watch'",
+      null,
+      "/tmp/project/.omx/runtime/codex-home/session-1",
+      null,
+      false,
+      "sess-detached-managed",
+      undefined,
+      undefined,
+      undefined,
+      {},
+      "/tmp/project/.codex",
+    );
+    const newSession = steps.find((step) => step.name === "new-session");
+    assert.ok(newSession);
+    assert.equal(
+      newSession!.args.includes("-e") &&
+        newSession!.args.some((arg) => arg === `${CODEX_SQLITE_HOME_ENV}=/tmp/project/.codex`),
       true,
     );
   });
