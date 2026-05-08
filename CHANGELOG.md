@@ -6,11 +6,32 @@ All notable changes to this project are documented in this file.
 
 ## [0.16.2] - 2026-05-08
 
+Post-`0.16.1` release-train correction and workflow hardening: aggregate `$ultragoal` Codex goals, commit-shared wiki/compaction support, session-isolated stateful workflows, setup-owned Codex hook trust state, and a release-review correction for generated hook feature flags.
+
+### Added
+
+- **Aggregate `$ultragoal` mode** — new ultragoal plans default to one aggregate Codex objective while OMX records per-story checkpoints; legacy per-story mode remains available for existing/no-mode plans and explicit `--codex-goal-mode per-story`.
+- **Commit-shared project wiki** — canonical wiki storage now lives under repository-root `omx_wiki/`, with native `PreCompact`/`PostCompact` hooks to preserve durable compaction findings.
+- **Setup-owned Codex hook trust state** — setup writes trust records for generated `codex-native-hook.js` wrappers while preserving user hook state.
+
+### Changed
+
+- **Goal-mode handoff guidance** — ultragoal docs, skill/plugin mirrors, planning, ralplan, deep-interview, and planner guidance now recommend `$ultragoal` as the default durable goal-mode follow-up.
+- **Wiki compatibility boundary** — legacy `.omx/wiki/` remains a read-only fallback when canonical `omx_wiki/` is absent.
+
 ### Fixed
 
-- Restored generated Codex hook setup config to `[features].codex_hooks = true`, matching current Codex lifecycle-hook docs.
-- Added plugin-mode hook trust-state generation for setup-owned `codex-native-hook.js` wrappers while preserving user hook state.
-- Updated setup docs/tests/plugin mirrors for the supported `codex_hooks` feature flag.
+- **Stateful workflow session isolation** — session-scoped workflow state no longer inherits or autocompletes from root/global workflow entries; explicit `all_sessions` clears remain the global cleanup path.
+- **Codex hook feature-flag regression** — release review restored generated config to `[features].codex_hooks = true`, repairs stale/unreleased `[features].hooks = true` aliases, and updates setup/docs/tests/plugin mirrors accordingly.
+- **Release body generation** — `RELEASE_BODY.md` again includes the required contributors anchor for generated GitHub release notes.
+
+### PRs
+
+- #2174, #2188, #2180, #2194, #2193
+
+### Verification
+
+- Release readiness evidence is tracked in `docs/qa/release-readiness-0.16.2.md`.
 
 ## [0.16.1] - 2026-05-08
 
