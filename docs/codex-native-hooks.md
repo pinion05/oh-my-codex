@@ -10,6 +10,7 @@ This page is the canonical answer to:
 
 - `.codex/config.toml` → enables setup-owned runtime feature flags including `[features].hooks = true` and `[features].goals = true`
 - `.codex/hooks.json` → registers the OMX-managed native hook command while preserving non-OMX hook entries already in the file
+- `.codex/config.toml` → also records `hooks.state."<hooks.json>:<event>:<group>:<handler>".trusted_hash` for the OMX-owned wrappers so recent Codex releases do not require a manual `/hooks` review for setup-managed hooks
 
 For project scope, `.gitignore` keeps generated `.codex/hooks.json` out of source control.
 `omx uninstall` removes only the OMX-managed wrapper entries from `.codex/hooks.json`; if user hooks remain, the file stays in place.
@@ -23,6 +24,7 @@ For project scope, `.gitignore` keeps generated `.codex/hooks.json` out of sourc
 - **tmux/runtime fallbacks**: `omx tmux-hook`, notify-hook, derived watcher, idle/session-end reporters
 
 OMX only owns the wrapper entries that invoke `dist/scripts/codex-native-hook.js`. User-managed hook entries in the same `.codex/hooks.json` file are preserved across `omx setup` refreshes and `omx uninstall`.
+Setup-owned trust state is limited to those generated wrapper identities; user hooks and user-owned `hooks.state` entries are preserved and remain subject to Codex's normal review flow.
 
 ## Mapping matrix
 

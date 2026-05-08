@@ -1,6 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildManagedCodexHookTrustState,
+  buildManagedCodexHookTrustToml,
   buildManagedCodexHooksConfig,
   getMissingManagedCodexHookEvents,
   mergeManagedCodexHooksConfig,
@@ -50,6 +52,112 @@ describe("codex hooks helpers", () => {
     assert.match(JSON.stringify(sessionStart), /echo keep-me/);
     assert.match(JSON.stringify(sessionStart), /echo standalone-user/);
     assert.doesNotMatch(JSON.stringify(sessionStart), /Loading OMX session context/);
+  });
+
+  it("builds trust state only for generated OMX hook handlers", () => {
+    const state = buildManagedCodexHookTrustState("/home/me/.codex/hooks.json", "/repo");
+    const keys = Object.keys(state).sort();
+
+    assert.deepEqual(keys, [
+      "/home/me/.codex/hooks.json:post_compact:0:0",
+      "/home/me/.codex/hooks.json:post_tool_use:0:0",
+      "/home/me/.codex/hooks.json:pre_compact:0:0",
+      "/home/me/.codex/hooks.json:pre_tool_use:0:0",
+      "/home/me/.codex/hooks.json:session_start:0:0",
+      "/home/me/.codex/hooks.json:stop:0:0",
+      "/home/me/.codex/hooks.json:user_prompt_submit:0:0",
+    ]);
+    for (const hookState of Object.values(state)) {
+      assert.match(hookState.trusted_hash, /^sha256:[a-f0-9]{64}$/);
+    }
+  });
+
+  it("matches Codex's normalized command hook hash identity", async () => {
+    const state = buildManagedCodexHookTrustState("/hooks.json", "/repo");
+    const command =
+      `"${process.execPath.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}" "/repo/dist/scripts/codex-native-hook.js"`;
+    const expectedIdentity = {
+      event_name: "pre_tool_use",
+      hooks: [
+        {
+          async: false,
+          command,
+          timeout: 600,
+          type: "command",
+        },
+      ],
+      matcher: "Bash",
+    };
+    const canonical = JSON.stringify({
+      event_name: expectedIdentity.event_name,
+      hooks: expectedIdentity.hooks.map((hook) => ({
+        async: hook.async,
+        command: hook.command,
+        timeout: hook.timeout,
+        type: hook.type,
+      })),
+      matcher: expectedIdentity.matcher,
+    });
+    const { createHash } = await import("node:crypto");
+    const expectedHash = `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
+
+    assert.equal(state["/hooks.json:pre_tool_use:0:0"]?.trusted_hash, expectedHash);
+  });
+
+  it("serializes managed hook trust state as TOML tables for config.toml", () => {
+    const toml = buildManagedCodexHookTrustToml("/hooks.json", "/repo");
+
+    assert.ok(
+      toml.includes('[hooks.state."/hooks.json:pre_tool_use:0:0"]'),
+    );
+    assert.match(toml, /^trusted_hash = "sha256:[a-f0-9]{64}"$/m);
+    assert.doesNotMatch(toml, /echo keep-me/);
+  });
+
+  it("can preserve existing hook state when explicitly merging trust into hooks.json", () => {
+    const merged = JSON.parse(
+      mergeManagedCodexHooksConfig(
+        JSON.stringify({
+          hooks: {
+            state: {
+              "custom:/hooks.json:stop:0:0": {
+                trusted_hash: "sha256:user",
+                enabled: false,
+              },
+            },
+            Stop: [
+              {
+                hooks: [{ type: "command", command: "echo user-stop" }],
+              },
+            ],
+          },
+        }),
+        "/repo",
+        "/hooks.json",
+      ),
+    ) as {
+      hooks: {
+        state: Record<string, { trusted_hash?: string; enabled?: boolean }>;
+        Stop: Array<{ hooks?: Array<{ command?: string }> }>;
+      };
+    };
+
+    assert.deepEqual(merged.hooks.state["custom:/hooks.json:stop:0:0"], {
+      trusted_hash: "sha256:user",
+      enabled: false,
+    });
+    assert.match(
+      merged.hooks.state["/hooks.json:stop:0:0"]?.trusted_hash ?? "",
+      /^sha256:[a-f0-9]{64}$/,
+    );
+    assert.match(JSON.stringify(merged.hooks.Stop), /echo user-stop/);
+  });
+
+  it("keeps managed hook merge idempotent", () => {
+    const first = mergeManagedCodexHooksConfig(null, "/repo", "/hooks.json");
+    const second = mergeManagedCodexHooksConfig(first, "/repo", "/hooks.json");
+
+    assert.equal(second, first);
   });
 
   it("removes only OMX-managed wrappers during uninstall cleanup", () => {

@@ -18,10 +18,12 @@ import { AGENT_DEFINITIONS } from "../agents/definitions.js";
 import { DEFAULT_FRONTIER_MODEL } from "./models.js";
 import type { UnifiedMcpRegistryServer } from "./mcp-registry.js";
 import { getOmxFirstPartySetupMcpServers } from "./omx-first-party-mcp.js";
+import { buildManagedCodexHookTrustToml } from "./codex-hooks.js";
 import type { HudPreset } from "../hud/types.js";
 
 interface MergeOptions {
   includeTui?: boolean;
+  codexHooksFile?: string;
   modelOverride?: string;
   sharedMcpServers?: UnifiedMcpRegistryServer[];
   sharedMcpRegistrySource?: string;
@@ -1410,6 +1412,7 @@ function getOmxTablesBlock(
   pkgRoot: string,
   includeTui = true,
   statusLinePreset: HudPreset = DEFAULT_STATUS_LINE_PRESET,
+  codexHooksFile?: string,
 ): string {
   const lines = [
     "",
@@ -1433,6 +1436,14 @@ function getOmxTablesBlock(
     if (typeof server.startupTimeoutSec === "number") {
       lines.push(`startup_timeout_sec = ${server.startupTimeoutSec}`);
     }
+  }
+
+  const hookTrustToml = buildManagedCodexHookTrustToml(codexHooksFile, pkgRoot);
+  if (hookTrustToml) {
+    lines.push("");
+    lines.push("# OMX-owned Codex hook trust state");
+    lines.push("# Trusts only setup-managed codex-native-hook.js wrappers.");
+    lines.push(hookTrustToml);
   }
 
   lines.push(
@@ -1517,6 +1528,7 @@ export function buildMergedConfig(
     pkgRoot,
     includeTui && !tuiUpsert.hadExistingTui,
     statusLinePreset,
+    options.codexHooksFile,
   );
   const sharedRegistryBlock = getSharedMcpRegistryBlock(
     options.sharedMcpServers ?? [],

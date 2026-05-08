@@ -1982,6 +1982,7 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 		);
 		const managedConfig = await updateManagedConfig(
 			scopeDirs.codexConfigFile,
+			scopeDirs.codexHooksFile,
 			pkgRoot,
 			sharedMcpRegistry,
 			summary.config,
@@ -3055,6 +3056,7 @@ async function cleanupLegacyManagedSkills(
 
 async function updateManagedConfig(
 	configPath: string,
+	hooksPath: string,
 	pkgRoot: string,
 	sharedMcpRegistry: UnifiedMcpRegistryLoadResult,
 	summary: SetupCategorySummary,
@@ -3088,6 +3090,7 @@ async function updateManagedConfig(
 
 	const finalConfig = buildMergedConfig(existing, pkgRoot, {
 		includeTui: omxManagesTui,
+		codexHooksFile: hooksPath,
 		modelOverride,
 		sharedMcpServers: sharedMcpRegistry.servers,
 		sharedMcpRegistrySource: sharedMcpRegistry.sourcePath,
