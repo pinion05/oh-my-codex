@@ -7,6 +7,8 @@ import { tmpdir } from 'node:os';
 import {
   getLegacyWikiDir,
   getWikiDir,
+  isLegacyWikiFallbackActive,
+  listPages,
   serializePage,
 } from '../../wiki/storage.js';
 import { WIKI_SCHEMA_VERSION } from '../../wiki/types.js';
@@ -61,6 +63,33 @@ describe('mcp/wiki-server module contract', () => {
       assert.equal('isError' in response ? response.isError : false, false);
       assert.equal(existsSync(join(getWikiDir(root), 'same-title.md')), true);
       assert.match(await readFile(join(getWikiDir(root), 'same-title.md'), 'utf8'), /canonical public content/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('wiki_delete does not create canonical storage when deleting from legacy-only fallback', async () => {
+    process.env.OMX_WIKI_SERVER_DISABLE_AUTO_START = '1';
+    const { handleWikiToolCall } = await import('../wiki-server.js');
+    const root = await mkdtemp(join(tmpdir(), 'wiki-mcp-legacy-delete-'));
+    try {
+      writeLegacyPage(root, 'Legacy', 'legacy content');
+
+      const response = await handleWikiToolCall({
+        params: {
+          name: 'wiki_delete',
+          arguments: {
+            page: 'legacy.md',
+            workingDirectory: root,
+          },
+        },
+      });
+
+      assert.equal('isError' in response ? response.isError : false, true);
+      assert.match(JSON.parse(response.content[0].text).error, /Wiki page not found or reserved: legacy\.md/);
+      assert.equal(existsSync(getWikiDir(root)), false);
+      assert.equal(isLegacyWikiFallbackActive(root), true);
+      assert.deepEqual(listPages(root), ['legacy.md']);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

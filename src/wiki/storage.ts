@@ -364,6 +364,8 @@ export function writePage(root: string, page: WikiPage, options: { allowReserved
 }
 
 export function deletePage(root: string, filename: string): boolean {
+  if (!existsSync(getWikiDir(root))) return false;
+
   return withWikiLock(root, () => {
     const deleted = deletePageUnsafe(root, filename);
     if (deleted) updateIndexUnsafe(root);
