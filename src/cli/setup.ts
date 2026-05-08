@@ -33,7 +33,9 @@ import {
 import {
 	buildMergedConfig,
 	getRootModelName,
+	getRootTomlArray,
 	hasLegacyOmxTeamRunTable,
+	isOmxManagedNotifyCommand,
 	stripExistingOmxBlocks,
 	stripExistingSharedMcpRegistryBlock,
 	stripOmxEnvSettings,
@@ -1992,6 +1994,8 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 			scopeDirs.codexHooksFile,
 			pkgRoot,
 			sharedMcpRegistry,
+			resolvedScope.scope,
+			scopeDirs.codexHomeDir,
 			summary.config,
 			backupContext,
 			{
@@ -3061,11 +3065,95 @@ async function cleanupLegacyManagedSkills(
 	return result;
 }
 
+interface NotifyMergePlan {
+	notifyCommand: string[] | false;
+	metadataPath?: string;
+	metadata?: Record<string, unknown>;
+}
+
+function getNotifyMetadataPath(codexHomeDir: string): string {
+	return join(codexHomeDir, ".omx", "notify-dispatch.json");
+}
+
+async function buildNotifyMergePlan(
+	existingConfig: string,
+	pkgRoot: string,
+	codexHomeDir: string,
+	scope: SetupScope,
+): Promise<NotifyMergePlan> {
+	if (scope === "project") {
+		return { notifyCommand: false };
+	}
+
+	const omxNotify = ["node", join(pkgRoot, "dist", "scripts", "notify-hook.js")];
+	const metadataPath = getNotifyMetadataPath(codexHomeDir);
+	const dispatcherNotify = [
+		"node",
+		join(pkgRoot, "dist", "scripts", "notify-dispatcher.js"),
+		"--metadata",
+		metadataPath,
+	];
+	const existingNotify = getRootTomlArray(existingConfig, "notify");
+
+	if (!existingNotify) {
+		return { notifyCommand: omxNotify };
+	}
+
+	if (isOmxManagedNotifyCommand(existingNotify)) {
+		if (
+			!existingNotify.some((part) =>
+				/(?:^|[\\/])notify-dispatcher\.js$/.test(part),
+			)
+		) {
+			return { notifyCommand: omxNotify };
+		}
+		try {
+			const metadata = JSON.parse(await readFile(metadataPath, "utf-8")) as {
+				previousNotify?: unknown;
+			};
+			const previousNotify = metadata.previousNotify;
+			if (
+				Array.isArray(previousNotify) &&
+				previousNotify.every((item) => typeof item === "string")
+			) {
+				return {
+					notifyCommand: dispatcherNotify,
+					metadataPath,
+					metadata: {
+						managedBy: "oh-my-codex",
+						version: 1,
+						previousNotify,
+						omxNotify,
+						dispatcherNotify,
+					},
+				};
+			}
+		} catch {
+			// Missing dispatcher metadata: fall back to plain OMX notify instead of nesting.
+		}
+		return { notifyCommand: omxNotify };
+	}
+
+	return {
+		notifyCommand: dispatcherNotify,
+		metadataPath,
+		metadata: {
+			managedBy: "oh-my-codex",
+			version: 1,
+			previousNotify: existingNotify,
+			omxNotify,
+			dispatcherNotify,
+		},
+	};
+}
+
 async function updateManagedConfig(
 	configPath: string,
 	hooksPath: string,
 	pkgRoot: string,
 	sharedMcpRegistry: UnifiedMcpRegistryLoadResult,
+	scope: SetupScope,
+	codexHomeDir: string,
 	summary: SetupCategorySummary,
 	backupContext: SetupBackupContext,
 	options: Pick<SetupOptions, "dryRun" | "verbose" | "modelUpgradePrompt"> & {
@@ -3095,6 +3183,12 @@ async function updateManagedConfig(
 		}
 	}
 
+	const notifyPlan = await buildNotifyMergePlan(
+		existing,
+		pkgRoot,
+		codexHomeDir,
+		scope,
+	);
 	const finalConfig = buildMergedConfig(existing, pkgRoot, {
 		includeTui: omxManagesTui,
 		codexHooksFile: hooksPath,
@@ -3104,6 +3198,7 @@ async function updateManagedConfig(
 		verbose: options.verbose,
 		statusLinePreset: options.statusLinePreset,
 		forceStatusLinePreset: options.forceStatusLinePreset,
+		notifyCommand: notifyPlan.notifyCommand,
 	});
 	const changed = existing !== finalConfig;
 
@@ -3129,6 +3224,13 @@ async function updateManagedConfig(
 
 	if (!options.dryRun) {
 		await writeFile(configPath, finalConfig);
+		if (notifyPlan.metadataPath && notifyPlan.metadata) {
+			await mkdir(dirname(notifyPlan.metadataPath), { recursive: true });
+			await writeFile(
+				notifyPlan.metadataPath,
+				JSON.stringify(notifyPlan.metadata, null, 2) + "\n",
+			);
+		}
 	}
 
 	if (

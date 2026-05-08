@@ -276,6 +276,7 @@ describe('notify-hook session-scoped iteration updates', () => {
   it('persists visual-verdict feedback from runtime assistant output', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-notify-visual-'));
     try {
+      await mkdir(join(wd, '.omx', 'state'), { recursive: true });
       const sessionId = 'sessVisual';
       const result = runNotifyHook({
         cwd: wd,

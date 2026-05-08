@@ -40,6 +40,17 @@ export interface RalphCanonicalArtifacts {
   migratedProgress: boolean;
 }
 
+function resolveRalphProgressPath(
+  cwd: string,
+  sessionId?: string,
+  baseStateDir?: string,
+): string {
+  const stateDir = baseStateDir
+    ? join(baseStateDir, ...(sessionId ? ['sessions', sessionId] : []))
+    : getStateDir(cwd, sessionId);
+  return join(stateDir, 'ralph-progress.json');
+}
+
 function sha256(text: string): string {
   return createHash('sha256').update(text).digest('hex');
 }
@@ -273,8 +284,9 @@ export async function recordRalphVisualFeedback(
   cwd: string,
   feedback: RalphVisualFeedback,
   sessionId?: string,
+  baseStateDir?: string,
 ): Promise<void> {
-  const canonicalProgressPath = join(getStateDir(cwd, sessionId), 'ralph-progress.json');
+  const canonicalProgressPath = resolveRalphProgressPath(cwd, sessionId, baseStateDir);
   const ledger = await readCanonicalProgressLedger(canonicalProgressPath);
   const threshold = Number.isFinite(feedback.threshold) ? Number(feedback.threshold) : DEFAULT_VISUAL_THRESHOLD;
   const nextActions = [

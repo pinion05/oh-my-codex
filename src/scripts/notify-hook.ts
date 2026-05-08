@@ -21,6 +21,7 @@
 import { writeFile, appendFile, mkdir, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { dirname, join, resolve } from 'path';
+import { isSessionStateUsable } from '../hooks/session.js';
 
 import { safeString, asNumber } from './notify-hook/utils.js';
 import {
@@ -65,6 +66,7 @@ import {
   maybeNotifyLeaderWorkerIdle,
 } from './notify-hook/team-worker.js';
 import { DEFAULT_MARKER } from './tmux-hook-engine.js';
+import { sameFilePath } from '../utils/paths.js';
 
 const RALPH_ACTIVE_PROGRESS_PHASES = new Set([
   'start',
@@ -81,6 +83,80 @@ const RALPH_ACTIVE_PROGRESS_PHASES = new Set([
 ]);
 
 const IDLE_NOTIFICATION_SUMMARY_MAX_LENGTH = 240;
+
+async function isOmxManagedCwd(cwd: string): Promise<boolean> {
+  const trustedInternalCwd = safeString(process.env.OMX_NOTIFY_HOOK_TRUSTED_MANAGED_CWD || '').trim();
+  if (trustedInternalCwd && sameFilePath(trustedInternalCwd, cwd)) return true;
+  if (existsSync(join(cwd, '.omx', 'setup-scope.json'))) return true;
+  if (existsSync(join(cwd, '.omx', 'managed'))) return true;
+  // Runtime-created OMX state/log directories are faithful ownership markers
+  // for existing session/team fixtures even when the older fixtures do not
+  // carry setup-scope.json, .omx/managed, or a fully-populated session.json.
+  // Keep the guard narrow: a plain project without an OMX runtime artifact still
+  // exits before creating .omx, while existing .omx state/log roots continue to
+  // receive hook updates.
+  if (existsSync(join(cwd, '.omx', 'state'))) return true;
+  if (existsSync(join(cwd, '.omx', 'logs'))) return true;
+  const sessionStatePath = join(cwd, '.omx', 'state', 'session.json');
+  if (existsSync(sessionStatePath)) {
+    try {
+      const sessionState = JSON.parse(await readFile(sessionStatePath, 'utf-8'));
+      if (isSessionStateUsable(sessionState, cwd)) return true;
+    } catch {
+      // Continue checking other managed markers.
+    }
+  }
+  const teamWorkerEnv = safeString(process.env.OMX_TEAM_INTERNAL_WORKER || process.env.OMX_TEAM_WORKER || '').trim();
+  if (teamWorkerEnv) {
+    const [teamName = '', workerName = ''] = teamWorkerEnv.split('/');
+    if (teamName && workerName) {
+      const candidateStateRoots = [
+        safeString(process.env.OMX_TEAM_STATE_ROOT || '').trim(),
+        safeString(process.env.OMX_TEAM_LEADER_CWD || '').trim()
+          ? join(resolve(cwd, safeString(process.env.OMX_TEAM_LEADER_CWD || '').trim()), '.omx', 'state')
+          : '',
+        join(cwd, '.omx', 'state'),
+      ].filter((value, index, values) => value && values.indexOf(value) === index);
+      for (const candidateStateRoot of candidateStateRoots) {
+        const identityPath = join(candidateStateRoot, 'team', teamName, 'workers', workerName, 'identity.json');
+        if (!existsSync(identityPath)) continue;
+        try {
+          const raw = await readFile(identityPath, 'utf-8');
+          const identity = JSON.parse(raw);
+          const worktreePath = safeString(identity?.worktree_path || '').trim();
+          const stateRoot = safeString(identity?.team_state_root || '').trim();
+          if (
+            (!worktreePath || sameFilePath(worktreePath, cwd))
+            && (!stateRoot || sameFilePath(stateRoot, candidateStateRoot))
+          ) {
+            return true;
+          }
+        } catch {
+          return false;
+        }
+      }
+      // A worker notify hook with an explicit runtime root hint is OMX-scoped
+      // even when the hint fails validation. Let the main worker path log the
+      // unresolved-root warning and fail closed without inventing local state.
+      if (
+        safeString(process.env.OMX_TEAM_STATE_ROOT || '').trim()
+        || safeString(process.env.OMX_TEAM_LEADER_CWD || '').trim()
+      ) {
+        return true;
+      }
+    }
+  }
+  const hooksPath = join(cwd, '.codex', 'hooks.json');
+  if (existsSync(hooksPath)) {
+    try {
+      const raw = await readFile(hooksPath, 'utf-8');
+      return /(?:^|[\\/])codex-native-hook\.js(?:["'\s]|$)/.test(raw);
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
 
 function summarizeIdleNotificationMessage(message: unknown): string {
   const source = safeString(message)
@@ -172,6 +248,9 @@ async function main() {
   }
 
   const cwd = payload.cwd || payload['cwd'] || process.cwd();
+  if (!(await isOmxManagedCwd(cwd))) {
+    process.exit(0);
+  }
   const payloadSessionId = safeString(payload.session_id || payload['session-id'] || '');
   const payloadThreadId = safeString(payload['thread-id'] || payload.thread_id || '');
   const inputMessages = normalizeInputMessages(payload);

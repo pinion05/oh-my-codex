@@ -11,6 +11,14 @@ const NOTIFY_HOOK_SCRIPT = new URL('../../../dist/scripts/notify-hook.js', impor
 const DEEP_INTERVIEW_BLOCKED_APPROVAL_INPUTS = ['yes', 'y', 'proceed', 'continue', 'ok', 'sure', 'go ahead', 'next i should'];
 const NEXT_I_SHOULD_RESPONSE = 'Next I should update the focused tests.';
 const DEFAULT_AUTO_NUDGE_RESPONSE = 'continue with the current task only if it is already authorized';
+const INHERITED_OMX_ENV_KEYS = [
+  'OMX_ROOT',
+  'OMX_STATE_ROOT',
+  'OMX_SESSION_ID',
+  'OMX_SOURCE_CWD',
+  'OMX_STARTUP_CWD',
+  'OMX_ENTRY_PATH',
+] as const;
 
 async function withTempWorkingDir(run: (cwd: string) => Promise<void>): Promise<void> {
   const cwd = await mkdtemp(join(tmpdir(), 'omx-auto-nudge-'));
@@ -188,10 +196,12 @@ function runNotifyHook(
       ...process.env,
       PATH: `${fakeBinDir}:${process.env.PATH || ''}`,
       CODEX_HOME: codexHome,
+      ...Object.fromEntries(INHERITED_OMX_ENV_KEYS.map((key) => [key, ''])),
       ...(extraEnv.OMX_TEST_UNMANAGED_SESSION !== '1' && !extraEnv.OMX_TEAM_WORKER ? { OMX_SESSION_ID: 'sess-managed' } : {}),
       ...(extraEnv.OMX_TEST_UNMANAGED_SESSION !== '1' && !extraEnv.OMX_TEAM_WORKER ? { OMX_TEST_TMUX_SESSION_NAME: buildTmuxSessionName(cwd, 'sess-managed') } : {}),
       TMUX_PANE: '%99',
       TMUX: '1',
+      OMX_TEAM_INTERNAL_WORKER: '',
       OMX_TEAM_WORKER: '',
       OMX_TEAM_LEADER_NUDGE_MS: '9999999',
       OMX_TEAM_LEADER_STALE_MS: '9999999',

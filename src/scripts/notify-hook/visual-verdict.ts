@@ -38,7 +38,7 @@ function extractJsonCandidates(rawMessage: any): string[] {
   return candidates;
 }
 
-async function maybePersistRuntimeVisualFeedback({ cwd, output, sessionId }: any): Promise<void> {
+async function maybePersistRuntimeVisualFeedback({ cwd, output, sessionId, stateDir }: any): Promise<void> {
   if (!cwd || !output) return;
 
   const candidates = extractJsonCandidates(output);
@@ -51,7 +51,7 @@ async function maybePersistRuntimeVisualFeedback({ cwd, output, sessionId }: any
     try {
       const parsed = JSON.parse(candidate);
       const feedback = buildVisualLoopFeedback(parsed);
-      await recordRalphVisualFeedback(cwd, feedback, sessionId || undefined);
+      await recordRalphVisualFeedback(cwd, feedback, sessionId || undefined, stateDir || undefined);
       return;
     } catch {
       // Try next candidate
@@ -93,7 +93,7 @@ export async function maybePersistVisualVerdict({ cwd, payload, stateDir, logsDi
   // Runtime visual feedback (JSON/fenced JSON) for ralph-progress persistence.
   // Non-fatal and observable via warn-level structured logging.
   try {
-    await maybePersistRuntimeVisualFeedback({ cwd, output, sessionId });
+    await maybePersistRuntimeVisualFeedback({ cwd, output, sessionId, stateDir });
   } catch (err: any) {
     await logNotifyHookEvent(logsDir, {
       timestamp: new Date().toISOString(),

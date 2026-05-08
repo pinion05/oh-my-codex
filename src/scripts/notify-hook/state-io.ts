@@ -5,7 +5,7 @@
 import { mkdir, readFile, readdir, writeFile } from 'fs/promises';
 import { dirname, join, resolve } from 'path';
 import { existsSync } from 'fs';
-import { readUsableSessionState } from '../../hooks/session.js';
+import { isSessionStateUsable } from '../../hooks/session.js';
 import { asNumber, safeString } from './utils.js';
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -43,7 +43,9 @@ export async function readCurrentSessionId(baseStateDir: string): Promise<string
   }
 
   const cwd = resolve(baseStateDir, '..', '..');
-  const session = await readUsableSessionState(cwd);
+  const session = await readJsonIfExists(join(baseStateDir, 'session.json'), null);
+  if (!session || typeof session !== 'object') return undefined;
+  if (!isSessionStateUsable(session, cwd)) return undefined;
   const sessionId = safeString(session?.session_id);
   return SESSION_ID_PATTERN.test(sessionId) ? sessionId : undefined;
 }
