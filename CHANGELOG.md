@@ -4,6 +4,27 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-05-08
+
+Patch release focused on post-`0.16.0` reliability and release-safety hardening: bounded explore execution, safer local explore fast-path reads, clean CI dependency-install proof, session-scoped runtime authority, approved Team handoff repair behavior, context-pack status visibility, deep-interview flow clarity, and launch/runtime fixes.
+
+### Added
+- **Context-pack handoff status visibility** — approved execution paths can expose read-only context-pack readiness/status so follow-up repair behavior is explicit.
+- **Explore fast-path regression coverage** — local explore tests now cover symlink fallback and oversized text-search fallback behavior.
+
+### Changed
+- **CI dependency proof is clean again** — Node CI jobs run `npm ci` unconditionally instead of skipping install on a restored `node_modules` cache.
+- **Team approved handoffs are stricter and more repairable** — selected handoffs, invalid diagnostics, nonready repair-only handling, binding transport, and DAG fallback status stay aligned.
+- **Runtime/session authority is more durable** — session-scoped runtime state, project-scoped Codex goal state, and stale skill-active/HUD cleanup are tightened.
+
+### Fixed
+- **Explore local fast-path boundary hardening** — explicit local file reads reject symlinks before reading, and text search uses bounded reads instead of loading oversized files.
+- **Explore process storm protection** — Codex-backed explore execution has stronger process/output limits before semantic fallback.
+- **Launch/runtime reliability** — Darwin worktree launch assertions, Windows OMX root paths, current JS runtime helpers, plugin skill cache refresh, MCP sibling cleanup, visual Ralph recovery, and native hook background output were hardened.
+
+### Verification
+- Release readiness evidence is tracked in `docs/qa/release-readiness-0.16.1.md`.
+
 ## [0.16.0] - 2026-05-06
 
 Minor release focused on skill deprecation and native Codex goal-mode integration. This release prepares durable goal workflows, Codex goal snapshot reconciliation, Team/Ralph goal handoff safety, and catalog/plugin skill delivery cleanup after `0.15.3`.

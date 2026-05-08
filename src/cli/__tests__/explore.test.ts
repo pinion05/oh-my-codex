@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { chmod, mkdtemp, readFile, rm, mkdir, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, mkdir, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -842,6 +842,51 @@ describe('exploreCommand', () => {
       assert.equal(result.exitCode, 0);
       assert.match(result.stdout, /# Demo README/);
       assert.match(result.stdout, /\[truncated: file exceeds local fast-path limit/);
+      assert.equal(result.stderr, '');
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('does not follow symlinks in explicit file-read local fast-path lookups', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-explore-local-symlink-'));
+    const outside = await mkdtemp(join(tmpdir(), 'omx-explore-local-outside-'));
+    try {
+      await writeFile(join(outside, 'secret.txt'), 'outside-secret-should-not-print\n');
+      await symlink(join(outside, 'secret.txt'), join(wd, 'leak.txt'));
+      const harnessStub = join(wd, 'explore-stub.sh');
+      await writeFile(harnessStub, '#!/bin/sh\nprintf "harness-fallback\\n"\n');
+      await chmod(harnessStub, 0o755);
+
+      const result = await runExploreCommandForTest(wd, ['--prompt', 'read leak.txt'], {
+        OMX_EXPLORE_BIN: harnessStub,
+      });
+
+      assert.equal(result.exitCode, 0);
+      assert.match(result.stdout, /harness-fallback/);
+      assert.doesNotMatch(result.stdout, /outside-secret-should-not-print/);
+      assert.doesNotMatch(result.stdout, /local fast-path used/);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('does not read oversized files during text-search local fast-path lookups', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-explore-local-large-text-'));
+    try {
+      await writeFile(join(wd, 'large.txt'), `${'x'.repeat(20_000)}\nlarge-only-needle\n`);
+      const harnessStub = join(wd, 'explore-stub.sh');
+      await writeFile(harnessStub, '#!/bin/sh\nprintf "harness-fallback\\n"\n');
+      await chmod(harnessStub, 0o755);
+
+      const result = await runExploreCommandForTest(wd, ['--prompt', 'search for large-only-needle'], {
+        OMX_EXPLORE_BIN: harnessStub,
+      });
+
+      assert.equal(result.exitCode, 0);
+      assert.match(result.stdout, /harness-fallback/);
+      assert.doesNotMatch(result.stdout, /local fast-path used \(text lookup\)/);
       assert.equal(result.stderr, '');
     } finally {
       await rm(wd, { recursive: true, force: true });

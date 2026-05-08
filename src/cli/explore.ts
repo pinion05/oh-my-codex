@@ -1,4 +1,4 @@
-import { open as openFile, readFile, readdir, stat } from 'fs/promises';
+import { open as openFile, readFile, readdir, lstat, stat } from 'fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { getPackageRoot } from '../utils/package.js';
@@ -237,6 +237,8 @@ async function resolveExploreLocalFastPath(prompt: string, cwd: string): Promise
     const targetPath = resolve(cwd, relativeLookup.path);
     const cwdRoot = resolve(cwd);
     if ((targetPath === cwdRoot || targetPath.startsWith(`${cwdRoot}${sep}`)) && existsSync(targetPath)) {
+      const targetLinkStat = await lstat(targetPath);
+      if (targetLinkStat.isSymbolicLink()) return undefined;
       const targetStat = await stat(targetPath);
       const relativePath = relative(cwd, targetPath) || '.';
       if (targetStat.isDirectory()) {
@@ -281,14 +283,16 @@ async function resolveExploreLocalFastPath(prompt: string, cwd: string): Promise
       matches.push(relativePath);
       continue;
     }
-    let content: string;
+    let targetStat;
     try {
-      content = await readFile(filePath, 'utf-8');
+      targetStat = await stat(filePath);
+      if (!targetStat.isFile() || targetStat.size > LOCAL_FAST_PATH_FILE_MAX_BYTES) continue;
+      const { lines } = await readBoundedTextFile(filePath, targetStat.size);
+      const line = lines.findIndex((value) => value.toLowerCase().includes(needle));
+      if (line >= 0) matches.push(`${relativePath}:${line + 1}`);
     } catch {
       continue;
     }
-    const line = content.split(/\r?\n/).findIndex((value) => value.toLowerCase().includes(needle));
-    if (line >= 0) matches.push(`${relativePath}:${line + 1}`);
   }
 
   if (matches.length === 0) return undefined;

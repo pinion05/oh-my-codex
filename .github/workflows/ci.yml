@@ -90,14 +90,7 @@ jobs:
         with:
           node-version: 20
           cache: npm
-      - name: Restore node_modules cache
-        id: node-modules-cache
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
       - run: npm ci
-        if: steps.node-modules-cache.outputs.cache-hit != 'true'
       - run: npm run lint
 
   typecheck:
@@ -110,14 +103,7 @@ jobs:
         with:
           node-version: 20
           cache: npm
-      - name: Restore node_modules cache
-        id: node-modules-cache
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
       - run: npm ci
-        if: steps.node-modules-cache.outputs.cache-hit != 'true'
       - run: npx tsc --noEmit
       - run: npm run check:no-unused
 
@@ -131,14 +117,7 @@ jobs:
         with:
           node-version: 20
           cache: npm
-      - name: Restore node_modules cache
-        id: node-modules-cache
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
       - run: npm ci
-        if: steps.node-modules-cache.outputs.cache-hit != 'true'
       - run: npm run build
       - name: Upload prebuilt dist artifact
         uses: actions/upload-artifact@v4
@@ -204,14 +183,7 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
-      - name: Restore node_modules cache
-        id: node-modules-cache
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
       - run: npm ci
-        if: steps.node-modules-cache.outputs.cache-hit != 'true'
       - name: Download prebuilt dist artifact
         uses: actions/download-artifact@v8
         with:
@@ -252,14 +224,7 @@ jobs:
         with:
           node-version: 20
           cache: npm
-      - name: Restore node_modules cache
-        id: node-modules-cache
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
       - run: npm ci
-        if: steps.node-modules-cache.outputs.cache-hit != 'true'
       - name: Download prebuilt dist artifact
         uses: actions/download-artifact@v8
         with:
@@ -302,14 +267,7 @@ jobs:
         with:
           node-version: 20
           cache: npm
-      - name: Restore node_modules cache
-        id: node-modules-cache
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
       - run: npm ci
-        if: steps.node-modules-cache.outputs.cache-hit != 'true'
       - name: Download prebuilt dist artifact
         uses: actions/download-artifact@v8
         with:
@@ -335,14 +293,7 @@ jobs:
           toolchain: stable
       - name: Restore Rust build cache
         uses: Swatinem/rust-cache@v2
-      - name: Restore node_modules cache
-        id: node-modules-cache
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
       - run: npm ci
-        if: steps.node-modules-cache.outputs.cache-hit != 'true'
       - name: Download prebuilt dist artifact
         uses: actions/download-artifact@v8
         with:

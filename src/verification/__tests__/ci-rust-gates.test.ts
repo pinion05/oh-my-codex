@@ -75,16 +75,18 @@ describe('CI Rust gates', () => {
     assert.doesNotMatch(testJob, /^\s+npm run build$/m);
   });
 
-  it('caches dependency installs without weakening the CI status gate', () => {
+  it('uses npm package caching without skipping clean dependency installs', () => {
     const workflow = readCiWorkflow();
 
     for (const jobName of ['lint', 'typecheck', 'build-dist', 'test', 'coverage-team-critical', 'ralph-persistence-gate', 'build']) {
       const job = jobBlock(workflow, jobName);
 
-      assert.match(job, /uses:\s*actions\/cache@v4/);
-      assert.match(job, /path:\s*node_modules/);
-      assert.match(job, /key:\s*\$\{\{ runner\.os \}\}-node-modules-\$\{\{ hashFiles\('package-lock\.json'\) \}\}/);
-      assert.match(job, /if:\s*steps\.node-modules-cache\.outputs\.cache-hit != 'true'/);
+      assert.match(job, /uses:\s*actions\/setup-node@v6/);
+      assert.match(job, /cache:\s*npm/);
+      assert.match(job, /run:\s*npm ci/);
+      assert.doesNotMatch(job, /uses:\s*actions\/cache@v4/);
+      assert.doesNotMatch(job, /path:\s*node_modules/);
+      assert.doesNotMatch(job, /cache-hit != 'true'/);
     }
 
     for (const jobName of ['clippy', 'rust-tests', 'build']) {
