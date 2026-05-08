@@ -10,6 +10,7 @@ import path from 'path';
 import os from 'os';
 import {
   getWikiDir,
+  getLegacyWikiDir,
   ensureWikiDir,
   parseFrontmatter,
   serializePage,
@@ -59,9 +60,71 @@ describe('Wiki Storage', () => {
   });
 
   describe('getWikiDir', () => {
-    it('should return .omx/wiki path', () => {
+    it('should return repository omx_wiki path', () => {
       const dir = getWikiDir(tempDir);
-      expect(dir).toBe(path.join(tempDir, '.omx', 'wiki'));
+      expect(dir).toBe(path.join(tempDir, 'omx_wiki'));
+    });
+  });
+
+
+  describe('legacy .omx/wiki fallback', () => {
+    it('should expose legacy pages only when canonical wiki is absent', () => {
+      const legacyDir = getLegacyWikiDir(tempDir);
+      fs.mkdirSync(legacyDir, { recursive: true });
+      fs.writeFileSync(path.join(legacyDir, 'legacy.md'), serializePage(makePage({
+        filename: 'legacy.md',
+        frontmatter: {
+          ...makePage().frontmatter,
+          title: 'Legacy',
+        },
+      })));
+
+      expect(listPages(tempDir)).toEqual(['legacy.md']);
+      expect(readPage(tempDir, 'legacy.md')?.frontmatter.title).toBe('Legacy');
+    });
+
+    it('should prefer canonical omx_wiki when both directories exist', () => {
+      const legacyDir = getLegacyWikiDir(tempDir);
+      fs.mkdirSync(legacyDir, { recursive: true });
+      fs.writeFileSync(path.join(legacyDir, 'legacy.md'), serializePage(makePage({ filename: 'legacy.md' })));
+
+      ensureWikiDir(tempDir);
+      const canonicalDir = getWikiDir(tempDir);
+      fs.writeFileSync(path.join(canonicalDir, 'canonical.md'), serializePage(makePage({ filename: 'canonical.md' })));
+
+      expect(listPages(tempDir)).toEqual(['canonical.md']);
+      expect(readPage(tempDir, 'legacy.md')).toBeNull();
+    });
+
+    it('should write to canonical omx_wiki even when legacy exists', () => {
+      const legacyDir = getLegacyWikiDir(tempDir);
+      fs.mkdirSync(legacyDir, { recursive: true });
+
+      writePage(tempDir, makePage());
+
+      expect(fs.existsSync(path.join(getWikiDir(tempDir), 'test-page.md'))).toBe(true);
+      expect(fs.existsSync(path.join(legacyDir, 'test-page.md'))).toBe(false);
+    });
+
+    it('should not index legacy fallback pages into canonical metadata', () => {
+      const legacyDir = getLegacyWikiDir(tempDir);
+      fs.mkdirSync(legacyDir, { recursive: true });
+      fs.writeFileSync(path.join(legacyDir, 'legacy.md'), serializePage(makePage({
+        filename: 'legacy.md',
+        frontmatter: {
+          ...makePage().frontmatter,
+          title: 'Legacy Private',
+        },
+        content: '\n# Legacy Private\n',
+      })));
+
+      withWikiLock(tempDir, () => {
+        updateIndexUnsafe(tempDir);
+      });
+
+      const index = fs.readFileSync(path.join(getWikiDir(tempDir), 'index.md'), 'utf-8');
+      expect(index).toContain('> 0 pages | Last updated:');
+      expect(index).not.toContain('Legacy Private');
     });
   });
 
@@ -71,33 +134,21 @@ describe('Wiki Storage', () => {
       expect(fs.existsSync(dir)).toBe(true);
     });
 
-    it('should create .gitignore with wiki/ entry', () => {
+    it('should not create .omx/.gitignore for wiki ignores', () => {
       ensureWikiDir(tempDir);
       const gitignorePath = path.join(tempDir, '.omx', '.gitignore');
-      expect(fs.existsSync(gitignorePath)).toBe(true);
-      expect(fs.readFileSync(gitignorePath, 'utf-8')).toContain('wiki/');
+      expect(fs.existsSync(gitignorePath)).toBe(false);
     });
 
-    it('should append to existing .gitignore', () => {
-      const omcDir = path.join(tempDir, '.omx');
-      fs.mkdirSync(omcDir, { recursive: true });
-      fs.writeFileSync(path.join(omcDir, '.gitignore'), 'state/\n');
+    it('should not mutate an existing .omx/.gitignore', () => {
+      const omxDir = path.join(tempDir, '.omx');
+      fs.mkdirSync(omxDir, { recursive: true });
+      const gitignorePath = path.join(omxDir, '.gitignore');
+      fs.writeFileSync(gitignorePath, 'state/\n');
 
       ensureWikiDir(tempDir);
-      const content = fs.readFileSync(path.join(omcDir, '.gitignore'), 'utf-8');
-      expect(content).toContain('state/');
-      expect(content).toContain('wiki/');
-    });
-
-    it('should not duplicate wiki/ in .gitignore', () => {
-      const omcDir = path.join(tempDir, '.omx');
-      fs.mkdirSync(omcDir, { recursive: true });
-      fs.writeFileSync(path.join(omcDir, '.gitignore'), 'wiki/\n');
-
-      ensureWikiDir(tempDir);
-      const content = fs.readFileSync(path.join(omcDir, '.gitignore'), 'utf-8');
-      const matches = content.match(/wiki\//g);
-      expect(matches?.length).toBe(1);
+      const content = fs.readFileSync(gitignorePath, 'utf-8');
+      expect(content).toBe('state/\n');
     });
   });
 

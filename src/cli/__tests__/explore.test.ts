@@ -348,7 +348,7 @@ describe('buildExplorePromptWithWikiContext', () => {
       assert.match(prompt, /prefer repository-backed facts/i);
       assert.match(prompt, /Wiki mismatch/);
       assert.match(prompt, /Original Explore Prompt/);
-      assert.equal(existsSync(join(wd, '.omx', 'wiki', 'log.md')), false);
+      assert.equal(existsSync(join(wd, 'omx_wiki', 'log.md')), false);
     } finally {
       await rm(wd, { recursive: true, force: true });
     }
@@ -374,7 +374,7 @@ describe('buildExplorePromptWithWikiContext', () => {
       });
 
       buildExplorePromptWithWikiContext('session-start lifecycle', wd);
-      const logPath = join(wd, '.omx', 'wiki', 'log.md');
+      const logPath = join(wd, 'omx_wiki', 'log.md');
       assert.equal(existsSync(logPath), false);
 
       // sanity: direct query callers still log by default

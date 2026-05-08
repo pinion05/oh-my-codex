@@ -9,7 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { queryWiki } from '../query.js';
-import { writePage, ensureWikiDir } from '../storage.js';
+import { writePage, ensureWikiDir, getLegacyWikiDir, getWikiDir } from '../storage.js';
 import { WIKI_SCHEMA_VERSION } from '../types.js';
 import type { WikiPage } from '../types.js';
 
@@ -155,10 +155,40 @@ describe('Wiki Query', () => {
 
     queryWiki(tempDir, 'authentication');
 
-    const logPath = path.join(tempDir, '.omx', 'wiki', 'log.md');
+    const logPath = path.join(getWikiDir(tempDir), 'log.md');
     expect(fs.existsSync(logPath)).toBe(true);
     const logContent = await fsp.readFile(logPath, 'utf8');
     expect(logContent).toContain('Query "authentication"');
+  });
+
+
+
+  it('does not create canonical omx_wiki while querying legacy fallback', async () => {
+    await fsp.rm(getWikiDir(tempDir), { recursive: true, force: true });
+    const legacyDir = getLegacyWikiDir(tempDir);
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.writeFileSync(path.join(legacyDir, 'legacy.md'), `---
+title: "Legacy Auth"
+tags: ["auth"]
+created: 2025-01-01T00:00:00.000Z
+updated: 2025-01-01T00:00:00.000Z
+sources: []
+links: []
+category: reference
+confidence: medium
+schemaVersion: 1
+---
+
+# Legacy Auth
+
+legacy authentication note
+`);
+
+    const results = queryWiki(tempDir, 'authentication');
+
+    expect(results.length).toBe(1);
+    expect(results[0].page.filename).toBe('legacy.md');
+    expect(fs.existsSync(getWikiDir(tempDir))).toBe(false);
   });
 
   it('can skip query logging for read-only callers', () => {
@@ -169,6 +199,6 @@ describe('Wiki Query', () => {
 
     const results = queryWiki(tempDir, 'sessionstart', { logQuery: false });
     expect(results.length).toBe(1);
-    expect(fs.existsSync(path.join(tempDir, '.omx', 'wiki', 'log.md'))).toBe(false);
+    expect(fs.existsSync(path.join(getWikiDir(tempDir), 'log.md'))).toBe(false);
   });
 });

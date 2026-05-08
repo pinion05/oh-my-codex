@@ -80,6 +80,20 @@ describe("codex hooks helpers", () => {
     assert.match(removedMixed.nextContent, /"version": 1/);
   });
 
+
+
+  it("registers managed compact hook wrappers", () => {
+    const config = buildManagedCodexHooksConfig("/repo");
+    assert.ok(config.hooks.PreCompact?.length);
+    assert.ok(config.hooks.PostCompact?.length);
+    const preCompact = config.hooks.PreCompact as Array<{ hooks?: Array<{ command?: string }> }>;
+    const postCompact = config.hooks.PostCompact as Array<{ hooks?: Array<{ command?: string }> }>;
+    const preCommand = preCompact[0]?.hooks?.[0]?.command;
+    const postCommand = postCompact[0]?.hooks?.[0]?.command;
+    assert.match(String(preCommand), /codex-native-hook\.js/);
+    assert.match(String(postCommand), /codex-native-hook\.js/);
+  });
+
   it("reports missing managed hook coverage by event", () => {
     const missing = getMissingManagedCodexHookEvents(
       JSON.stringify({
@@ -102,7 +116,7 @@ describe("codex hooks helpers", () => {
       }),
     );
 
-    assert.deepEqual(missing, ["PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop"]);
+    assert.deepEqual(missing, ["PreToolUse", "PostToolUse", "UserPromptSubmit", "PreCompact", "PostCompact", "Stop"]);
   });
 
   it("returns null for invalid hooks.json content", () => {

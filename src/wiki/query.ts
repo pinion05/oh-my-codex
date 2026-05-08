@@ -15,6 +15,7 @@ import {
 import {
   readAllPages,
   appendLog,
+  isLegacyWikiFallbackActive,
 } from './storage.js';
 
 /**
@@ -81,6 +82,7 @@ export function queryWiki(
   options: WikiQueryOptions = {},
 ): WikiQueryMatch[] {
   const { tags: filterTags, category, limit = 20, logQuery = true } = options;
+  const legacyFallbackActive = isLegacyWikiFallbackActive(root);
   const pages = readAllPages(root);
   const queryLower = queryText.toLowerCase();
   const queryTerms = tokenize(queryText);
@@ -150,7 +152,7 @@ export function queryWiki(
   matches.sort((a, b) => b.score - a.score);
   const limited = matches.slice(0, limit);
 
-  if (logQuery) {
+  if (logQuery && !legacyFallbackActive) {
     appendLog(root, {
       timestamp: new Date().toISOString(),
       operation: 'query',

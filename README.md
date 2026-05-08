@@ -265,7 +265,7 @@ If `Shift+Enter` still submits instead of inserting a newline inside an OMX-mana
 
 - `omx explore --prompt "..."` is for read-only repository lookup
 - `omx sparkshell <command>` is for shell-native inspection and bounded verification
-- when `.omx/wiki/` exists, `omx explore` can inject wiki-first context before falling back to broader repository search
+- when `omx_wiki/` exists, `omx explore` can inject wiki-first context before falling back to broader repository search
 - fallback boundaries are explicit: sparkshell-backend fallback is reported on stderr, and spark-model fallback emits stderr metadata plus an `## OMX Explore fallback` notice in stdout so users can see when cost/behavior may differ from the low-cost path
 
 Examples:
@@ -279,7 +279,7 @@ omx sparkshell --tmux-pane %12 --tail-lines 400
 ### Wiki
 
 - `omx wiki` is the CLI parity surface for the OMX wiki MCP server
-- wiki data lives locally under `.omx/wiki/`
+- wiki data lives as repository project knowledge under `omx_wiki/`
 - the wiki is markdown-first and search-first, not vector-first
 
 Examples:

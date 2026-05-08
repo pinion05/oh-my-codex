@@ -10,10 +10,12 @@ import {
   appendLog,
   deletePage,
   ingestKnowledge,
+  isLegacyWikiFallbackActive,
   lintWiki,
   listPages,
   normalizeWikiPageName,
   queryWiki,
+  readCanonicalPage,
   readIndex,
   readPage,
   titleToSlug,
@@ -203,7 +205,7 @@ export async function handleWikiToolCall(request: {
       case 'wiki_add': {
         const title = String(args.title || '');
         const slug = titleToSlug(title);
-        if (readPage(root, slug)) {
+        if (readCanonicalPage(root, slug)) {
           return errorText(`Page "${slug}" already exists. Use wiki_ingest to merge into it.`);
         }
         const result = ingestKnowledge(root, {
@@ -248,6 +250,15 @@ export async function handleWikiToolCall(request: {
       }
 
       case 'wiki_refresh': {
+        if (isLegacyWikiFallbackActive(root)) {
+          return text({
+            refreshed: false,
+            legacyFallback: true,
+            pages: listPages(root),
+            index: readIndex(root),
+            message: 'Legacy .omx/wiki fallback is read-only; copy selected pages into omx_wiki/ before refreshing canonical metadata.',
+          });
+        }
         withWikiLock(root, () => {
           updateIndexUnsafe(root);
         });

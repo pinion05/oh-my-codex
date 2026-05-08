@@ -6,6 +6,8 @@ type CodexHookEventName =
   | "PreToolUse"
   | "PostToolUse"
   | "UserPromptSubmit"
+  | "PreCompact"
+  | "PostCompact"
   | "Stop";
 
 type CodexHookPayload = Record<string, unknown>;

@@ -8,8 +8,14 @@ import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import { ensureWikiDir } from '../storage.js';
-import { onSessionEnd } from '../lifecycle.js';
+import {
+  ensureWikiDir,
+  getLegacyWikiDir,
+  getWikiDir,
+  serializePage,
+} from '../storage.js';
+import { onSessionEnd, onSessionStart } from '../lifecycle.js';
+import { WIKI_SCHEMA_VERSION } from '../types.js';
 
 describe('Wiki lifecycle hooks', () => {
   let tempDir: string;
@@ -45,5 +51,35 @@ describe('Wiki lifecycle hooks', () => {
     const indexPath = path.join(wikiDir, 'index.md');
     expect(fs.existsSync(indexPath)).toBe(true);
     expect(fs.readFileSync(indexPath, 'utf-8')).toContain('session-log');
+  });
+
+  it('summarizes legacy fallback on session start without creating canonical wiki files', () => {
+    const now = new Date().toISOString();
+    const legacyDir = getLegacyWikiDir(tempDir);
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.mkdirSync(path.join(tempDir, '.omx'), { recursive: true });
+    fs.writeFileSync(path.join(tempDir, '.omx', 'project-memory.json'), JSON.stringify({
+      techStack: 'Do not sync this into canonical storage during legacy fallback.',
+    }));
+    fs.writeFileSync(path.join(legacyDir, 'legacy.md'), serializePage({
+      filename: 'legacy.md',
+      frontmatter: {
+        title: 'Legacy',
+        tags: ['legacy'],
+        created: now,
+        updated: now,
+        sources: [],
+        links: [],
+        category: 'reference',
+        confidence: 'medium',
+        schemaVersion: WIKI_SCHEMA_VERSION,
+      },
+      content: '\n# Legacy\n',
+    }));
+
+    const result = onSessionStart({ cwd: tempDir });
+
+    expect(result.additionalContext).toContain('legacy pages at .omx/wiki/');
+    expect(fs.existsSync(getWikiDir(tempDir))).toBe(false);
   });
 });

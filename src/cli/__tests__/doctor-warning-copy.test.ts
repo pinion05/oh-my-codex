@@ -505,7 +505,7 @@ OMX_LORE_COMMIT_GUARD = "off"
 			assert.equal(res.status, 0, res.stderr || res.stdout);
 			assert.match(
 				res.stdout,
-				/Native hooks: hooks\.json is missing OMX-managed coverage for PreToolUse, PostToolUse, UserPromptSubmit, Stop; run "omx setup --force" to restore native hooks/,
+				/Native hooks: hooks\.json is missing OMX-managed coverage for PreToolUse, PostToolUse, UserPromptSubmit, PreCompact, PostCompact, Stop; run "omx setup --force" to restore native hooks/,
 			);
 		} finally {
 			await rm(wd, { recursive: true, force: true });

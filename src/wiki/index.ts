@@ -25,6 +25,10 @@ export { WIKI_SCHEMA_VERSION, DEFAULT_WIKI_CONFIG } from './types.js';
 // Storage
 export {
   getWikiDir,
+  getLegacyWikiDir,
+  hasReadableWiki,
+  isLegacyWikiFallbackActive,
+  readCanonicalPage,
   ensureWikiDir,
   withWikiLock,
   readPage,
@@ -50,4 +54,4 @@ export {
 export { ingestKnowledge } from './ingest.js';
 export { queryWiki, tokenize } from './query.js';
 export { lintWiki } from './lint.js';
-export { onSessionStart, onSessionEnd, onPreCompact } from './lifecycle.js';
+export { onSessionStart, onSessionEnd, onPreCompact, onPostCompact } from './lifecycle.js';
