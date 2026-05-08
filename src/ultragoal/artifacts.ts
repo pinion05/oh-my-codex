@@ -13,6 +13,7 @@ export const ULTRAGOAL_GOALS = 'goals.json';
 export const ULTRAGOAL_LEDGER = 'ledger.jsonl';
 
 export type UltragoalStatus = 'pending' | 'in_progress' | 'complete' | 'failed';
+export type UltragoalCodexGoalMode = 'aggregate' | 'per_story';
 
 export interface UltragoalItem {
   id: string;
@@ -37,6 +38,8 @@ export interface UltragoalPlan {
   briefPath: string;
   goalsPath: string;
   ledgerPath: string;
+  codexGoalMode?: UltragoalCodexGoalMode;
+  codexObjective?: string;
   activeGoalId?: string;
   goals: UltragoalItem[];
 }
@@ -61,6 +64,7 @@ export interface UltragoalLedgerEntry {
 export interface CreateUltragoalOptions {
   brief: string;
   goals?: Array<{ title?: string; objective: string; tokenBudget?: number }>;
+  codexGoalMode?: UltragoalCodexGoalMode;
   now?: Date;
   force?: boolean;
 }
@@ -110,6 +114,30 @@ function cleanLine(line: string): string {
 
 function normalizeObjective(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
+}
+
+function codexGoalMode(plan: UltragoalPlan): UltragoalCodexGoalMode {
+  return plan.codexGoalMode ?? 'per_story';
+}
+
+function aggregateCodexObjective(goals: readonly UltragoalItem[]): string {
+  const prefix = `Complete all ultragoal stories in ${ULTRAGOAL_DIR}/${ULTRAGOAL_GOALS}: `;
+  const suffix = goals.map((goal) => `${goal.id} ${goal.title}`).join('; ');
+  const full = `${prefix}${suffix}`;
+  if (full.length <= 4000) return full;
+  const fallback = `Complete all ultragoal stories listed in ${ULTRAGOAL_DIR}/${ULTRAGOAL_GOALS}. Use ${ULTRAGOAL_DIR}/${ULTRAGOAL_LEDGER} as the durable audit trail.`;
+  if (fallback.length <= 4000) return fallback;
+  throw new UltragoalError('Generated aggregate Codex objective exceeds the 4,000 character goal limit.');
+}
+
+function expectedCodexObjective(plan: UltragoalPlan, goal: UltragoalItem): string {
+  return codexGoalMode(plan) === 'aggregate'
+    ? (plan.codexObjective ?? aggregateCodexObjective(plan.goals))
+    : goal.objective;
+}
+
+function isFinalAggregateCheckpoint(plan: UltragoalPlan, goal: UltragoalItem): boolean {
+  return plan.goals.every((candidate) => candidate.id === goal.id || candidate.status === 'complete');
 }
 
 function titleFromObjective(objective: string, fallback: string): string {
@@ -205,8 +233,10 @@ export async function createUltragoalPlan(cwd: string, options: CreateUltragoalO
     briefPath: `${ULTRAGOAL_DIR}/${ULTRAGOAL_BRIEF}`,
     goalsPath: `${ULTRAGOAL_DIR}/${ULTRAGOAL_GOALS}`,
     ledgerPath: `${ULTRAGOAL_DIR}/${ULTRAGOAL_LEDGER}`,
+    codexGoalMode: options.codexGoalMode ?? 'aggregate',
     goals: candidates,
   };
+  if (plan.codexGoalMode === 'aggregate') plan.codexObjective = aggregateCodexObjective(candidates);
 
   await mkdir(ultragoalDir(cwd), { recursive: true });
   await writeFile(ultragoalBriefPath(cwd), options.brief.endsWith('\n') ? options.brief : `${options.brief}\n`);
@@ -275,7 +305,7 @@ export async function checkpointUltragoal(cwd: string, options: CheckpointOption
     if (!snapshot.objective) {
       throw new UltragoalError('Blocked ultragoal checkpoint Codex snapshot is missing objective text.');
     }
-    if (normalizeObjective(snapshot.objective) === normalizeObjective(goal.objective)) {
+    if (normalizeObjective(snapshot.objective) === normalizeObjective(expectedCodexObjective(plan, goal))) {
       throw new UltragoalError('Blocked ultragoal checkpoint is only for a different completed legacy Codex goal; complete this ultragoal with --status complete after its audit passes.');
     }
     goal.updatedAt = now;
@@ -293,13 +323,18 @@ export async function checkpointUltragoal(cwd: string, options: CheckpointOption
     return plan;
   }
   if (options.status === 'complete') {
+    const expectedObjective = expectedCodexObjective(plan, goal);
+    const aggregateMode = codexGoalMode(plan) === 'aggregate';
+    const finalAggregateCheckpoint = aggregateMode && isFinalAggregateCheckpoint(plan, goal);
     const reconciliation = reconcileCodexGoalSnapshot(
       options.codexGoal === undefined ? null : parseCodexGoalSnapshot(options.codexGoal),
       {
-        expectedObjective: goal.objective,
-        allowedStatuses: ['complete'],
+        expectedObjective,
+        allowedStatuses: aggregateMode
+          ? (finalAggregateCheckpoint ? ['complete'] : ['active'])
+          : ['complete'],
         requireSnapshot: true,
-        requireComplete: true,
+        requireComplete: !aggregateMode || finalAggregateCheckpoint,
       },
     );
     if (!reconciliation.ok) {
@@ -333,6 +368,11 @@ export async function checkpointUltragoal(cwd: string, options: CheckpointOption
 }
 
 export function buildCodexGoalInstruction(goal: UltragoalItem, plan: UltragoalPlan): string {
+  if (codexGoalMode(plan) === 'aggregate') return buildAggregateCodexGoalInstruction(goal, plan);
+  return buildPerStoryCodexGoalInstruction(goal, plan);
+}
+
+function buildPerStoryCodexGoalInstruction(goal: UltragoalItem, plan: UltragoalPlan): string {
   const createPayload = {
     objective: goal.objective,
     ...(goal.tokenBudget ? { token_budget: goal.tokenBudget } : {}),
@@ -357,6 +397,40 @@ export function buildCodexGoalInstruction(goal: UltragoalItem, plan: UltragoalPl
     JSON.stringify(createPayload, null, 2),
     '',
     'Objective:',
+    goal.objective,
+  ].join('\n');
+}
+
+function buildAggregateCodexGoalInstruction(goal: UltragoalItem, plan: UltragoalPlan): string {
+  const objective = plan.codexObjective ?? aggregateCodexObjective(plan.goals);
+  const finalStory = isFinalAggregateCheckpoint(plan, goal);
+  const createPayload = { objective };
+  const checkpointStatus = finalStory ? 'complete' : 'active';
+  return [
+    'Ultragoal aggregate-goal handoff',
+    `Plan: ${plan.goalsPath}`,
+    `Ledger: ${plan.ledgerPath}`,
+    `Goal: ${goal.id} — ${goal.title}`,
+    '',
+    'Codex goal integration constraints:',
+    '- Codex goal = the whole ultragoal run; OMX G001/G002/etc. = ledger stories.',
+    '- First call get_goal. If no active goal exists, call create_goal with the aggregate payload below.',
+    '- If get_goal reports the same aggregate objective as active, continue this OMX story without creating a new Codex goal.',
+    '- If a different active or incomplete Codex goal exists, finish/checkpoint that goal before starting this ultragoal; do not replace hidden Codex state from the shell.',
+    finalStory
+      ? '- This is the final pending story: after the story and whole-run audit pass, call update_goal({status: "complete"}), then call get_goal again for a fresh complete snapshot.'
+      : '- This is not the final story: do not call update_goal yet; the aggregate Codex goal must remain active while later OMX stories remain.',
+    `- Checkpoint this OMX story with a fresh get_goal snapshot whose objective matches the aggregate payload and whose status is ${checkpointStatus}:`,
+    `  omx ultragoal checkpoint --goal-id ${goal.id} --status complete --evidence "<tests/files/PR evidence>" --codex-goal-json "<fresh get_goal JSON or path>"`,
+    '- If blocked or failed, checkpoint with --status failed and the failure evidence; rerun complete-goals --retry-failed to resume.',
+    '',
+    'create_goal payload:',
+    JSON.stringify(createPayload, null, 2),
+    '',
+    'Aggregate objective:',
+    objective,
+    '',
+    'Current OMX story objective:',
     goal.objective,
   ].join('\n');
 }

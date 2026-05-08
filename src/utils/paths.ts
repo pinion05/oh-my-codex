@@ -315,9 +315,14 @@ export function omxNotepadPath(projectRoot?: string): string {
   return join(omxRoot(projectRoot), "notepad.md");
 }
 
-/** oh-my-codex wiki directory (.omx/wiki/) */
+/** oh-my-codex wiki directory (repository-root omx_wiki/) */
 export function omxWikiDir(projectRoot?: string): string {
-  return join(omxRoot(projectRoot), "wiki");
+  return join(projectRoot || process.cwd(), "omx_wiki");
+}
+
+/** Legacy project-local wiki directory used before wiki pages became repository-tracked. */
+export function omxLegacyWikiDir(projectRoot?: string): string {
+  return join(projectRoot || process.cwd(), ".omx", "wiki");
 }
 
 /** oh-my-codex plans directory (.omx/plans/) */

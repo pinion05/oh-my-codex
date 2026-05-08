@@ -40,6 +40,8 @@ import {
 	stripOmxFeatureFlags,
 	stripOmxSeededBehavioralDefaults,
 	upsertPluginModeRuntimeFeatureFlags,
+	upsertManagedCodexHookTrustState,
+	stripManagedCodexHookTrustState,
 	OMX_PLUGIN_DEVELOPER_INSTRUCTIONS,
 } from "../config/generator.js";
 import { mergeManagedCodexHooksConfig } from "../config/codex-hooks.js";
@@ -1408,8 +1410,11 @@ async function applyPluginModeHooksConfig(
 	const existingConfig = existsSync(configPath)
 		? await readFile(configPath, "utf-8")
 		: "";
-	const nextConfig =
-		upsertPluginModeRuntimeFeatureFlags(existingConfig).trimEnd() + "\n";
+	const nextConfig = upsertManagedCodexHookTrustState(
+		upsertPluginModeRuntimeFeatureFlags(stripManagedCodexHookTrustState(existingConfig)),
+		pkgRoot,
+		hooksPath,
+	);
 	if (nextConfig !== existingConfig) {
 		if (
 			await ensureBackup(
@@ -1436,6 +1441,7 @@ async function applyPluginModeHooksConfig(
 	const hooksConfig = mergeManagedCodexHooksConfig(
 		existingHooksContent,
 		pkgRoot,
+		hooksPath,
 	);
 	await syncManagedContent(
 		hooksConfig,
@@ -1521,6 +1527,7 @@ async function cleanupPluginModeLegacyConfig(
 	config = stripPluginModeLegacyRootDefaults(config);
 	config = stripOmxSeededBehavioralDefaults(config);
 	config = stripOmxFeatureFlags(config);
+	config = stripManagedCodexHookTrustState(config);
 	config = stripOmxEnvSettings(config);
 	config = config.trim();
 	const nextConfig = config.length > 0 ? `${config}\n` : "";
@@ -1982,6 +1989,7 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 		);
 		const managedConfig = await updateManagedConfig(
 			scopeDirs.codexConfigFile,
+			scopeDirs.codexHooksFile,
 			pkgRoot,
 			sharedMcpRegistry,
 			summary.config,
@@ -3055,6 +3063,7 @@ async function cleanupLegacyManagedSkills(
 
 async function updateManagedConfig(
 	configPath: string,
+	hooksPath: string,
 	pkgRoot: string,
 	sharedMcpRegistry: UnifiedMcpRegistryLoadResult,
 	summary: SetupCategorySummary,
@@ -3088,6 +3097,7 @@ async function updateManagedConfig(
 
 	const finalConfig = buildMergedConfig(existing, pkgRoot, {
 		includeTui: omxManagesTui,
+		codexHooksFile: hooksPath,
 		modelOverride,
 		sharedMcpServers: sharedMcpRegistry.servers,
 		sharedMcpRegistrySource: sharedMcpRegistry.sourcePath,

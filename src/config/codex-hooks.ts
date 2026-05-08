@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { join } from "path";
 
 export const MANAGED_HOOK_EVENTS = [
@@ -5,6 +6,8 @@ export const MANAGED_HOOK_EVENTS = [
   "PreToolUse",
   "PostToolUse",
   "UserPromptSubmit",
+  "PreCompact",
+  "PostCompact",
   "Stop",
 ] as const;
 
@@ -12,8 +15,18 @@ type ManagedHookEventName = (typeof MANAGED_HOOK_EVENTS)[number];
 
 type JsonObject = Record<string, unknown>;
 
+export interface ManagedHookEntry {
+  matcher?: string;
+  hooks: Array<{
+    type: "command";
+    command: string;
+    statusMessage?: string;
+    timeout?: number;
+  }>;
+}
+
 export interface ManagedCodexHooksConfig {
-  hooks: Record<ManagedHookEventName, Array<Record<string, unknown>>>;
+  hooks: Record<ManagedHookEventName, ManagedHookEntry[]>;
 }
 
 interface ParsedCodexHooksConfig {
@@ -25,6 +38,20 @@ export interface RemoveManagedCodexHooksResult {
   nextContent: string | null;
   removedCount: number;
 }
+
+export interface ManagedCodexHookTrustState {
+  trusted_hash: string;
+}
+
+const CODEX_HOOK_EVENT_LABELS: Record<ManagedHookEventName, string> = {
+  SessionStart: "session_start",
+  PreToolUse: "pre_tool_use",
+  PostToolUse: "post_tool_use",
+  UserPromptSubmit: "user_prompt_submit",
+  PreCompact: "pre_compact",
+  PostCompact: "post_compact",
+  Stop: "stop",
+};
 
 function isPlainObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -38,6 +65,10 @@ function quoteCommandPart(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
+function escapeTomlBasicString(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
 function buildCommandHook(
   command: string,
   options: {
@@ -45,13 +76,13 @@ function buildCommandHook(
     statusMessage?: string;
     timeout?: number;
   } = {},
-): Record<string, unknown> {
+): ManagedHookEntry {
   const hook = {
     type: "command",
     command,
     ...(options.statusMessage ? { statusMessage: options.statusMessage } : {}),
     ...(typeof options.timeout === "number" ? { timeout: options.timeout } : {}),
-  };
+  } satisfies ManagedHookEntry["hooks"][number];
 
   return {
     ...(options.matcher ? { matcher: options.matcher } : {}),
@@ -81,6 +112,12 @@ export function buildManagedCodexHooksConfig(
         buildCommandHook(command),
       ],
       UserPromptSubmit: [
+        buildCommandHook(command),
+      ],
+      PreCompact: [
+        buildCommandHook(command),
+      ],
+      PostCompact: [
         buildCommandHook(command),
       ],
       Stop: [
@@ -178,9 +215,108 @@ function serializeCodexHooksConfig(root: JsonObject): string {
   return JSON.stringify(root, null, 2) + "\n";
 }
 
+function canonicalJson(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => canonicalJson(item));
+  }
+  if (isPlainObject(value)) {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, canonicalJson(value[key])]),
+    );
+  }
+  return value;
+}
+
+function versionForCodexTomlIdentity(value: JsonObject): string {
+  const canonical = canonicalJson(value);
+  const serialized = JSON.stringify(canonical);
+  return `sha256:${createHash("sha256").update(serialized).digest("hex")}`;
+}
+
+function normalizedCommandHookIdentity(
+  eventName: ManagedHookEventName,
+  entry: ManagedHookEntry,
+  hook: ManagedHookEntry["hooks"][number],
+): JsonObject {
+  return {
+    event_name: CODEX_HOOK_EVENT_LABELS[eventName],
+    ...(entry.matcher ? { matcher: entry.matcher } : {}),
+    hooks: [
+      {
+        type: "command",
+        command: hook.command,
+        timeout: Math.max(1, hook.timeout ?? 600),
+        async: false,
+        ...(hook.statusMessage ? { statusMessage: hook.statusMessage } : {}),
+      },
+    ],
+  };
+}
+
+function managedHookStateKey(
+  hooksPath: string,
+  eventName: ManagedHookEventName,
+  groupIndex: number,
+  handlerIndex: number,
+): string {
+  return `${hooksPath}:${CODEX_HOOK_EVENT_LABELS[eventName]}:${groupIndex}:${handlerIndex}`;
+}
+
+export function buildManagedCodexHookTrustState(
+  hooksPath: string,
+  pkgRoot: string,
+): Record<string, ManagedCodexHookTrustState> {
+  const managedConfig = buildManagedCodexHooksConfig(pkgRoot);
+  const state: Record<string, ManagedCodexHookTrustState> = {};
+
+  for (const eventName of MANAGED_HOOK_EVENTS) {
+    const entries = managedConfig.hooks[eventName] as ManagedHookEntry[];
+    entries.forEach((entry, groupIndex) => {
+      entry.hooks.forEach((hook, handlerIndex) => {
+        if (hook.type !== "command" || !isOmxManagedHookCommand(hook.command)) {
+          return;
+        }
+        const key = managedHookStateKey(
+          hooksPath,
+          eventName,
+          groupIndex,
+          handlerIndex,
+        );
+        state[key] = {
+          trusted_hash: versionForCodexTomlIdentity(
+            normalizedCommandHookIdentity(eventName, entry, hook),
+          ),
+        };
+      });
+    });
+  }
+
+  return state;
+}
+
+export function buildManagedCodexHookTrustToml(
+  hooksPath: string | undefined,
+  pkgRoot: string,
+): string {
+  if (!hooksPath) return "";
+  const state = buildManagedCodexHookTrustState(hooksPath, pkgRoot);
+  return Object.entries(state)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .flatMap(([key, hookState]) => [
+      `[hooks.state."${escapeTomlBasicString(key)}"]`,
+      `trusted_hash = "${escapeTomlBasicString(hookState.trusted_hash)}"`,
+      "",
+    ])
+    .join("\n")
+    .trimEnd();
+}
+
 export function mergeManagedCodexHooksConfig(
   existingContent: string | null | undefined,
   pkgRoot: string,
+  hooksPath?: string,
 ): string {
   const managedConfig = buildManagedCodexHooksConfig(pkgRoot);
   const parsed =
@@ -208,6 +344,16 @@ export function mergeManagedCodexHooksConfig(
       ...preservedEntries,
       ...managedConfig.hooks[eventName].map((entry) => cloneJson(entry)),
     ];
+  }
+
+  if (hooksPath) {
+    const existingState = isPlainObject(nextHooks.state)
+      ? cloneJson(nextHooks.state)
+      : {};
+    nextHooks.state = {
+      ...existingState,
+      ...buildManagedCodexHookTrustState(hooksPath, pkgRoot),
+    };
   }
 
   if (Object.keys(nextHooks).length > 0) {

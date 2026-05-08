@@ -229,6 +229,11 @@ describe("omx setup scope behavior", () => {
       assert.match(configToml, /^USE_OMX_EXPLORE_CMD = "1"$/m);
       assert.match(configToml, /^codex_hooks = true$/m);
       assert.match(configToml, /^goals = true$/m);
+      assert.match(
+        configToml,
+        /^\[hooks\.state\.".*\/\.codex\/hooks\.json:session_start:0:0"\]$/m,
+      );
+      assert.match(configToml, /^trusted_hash = "sha256:[a-f0-9]{64}"$/m);
       const hooksJson = JSON.parse(await readFile(localHooks, "utf-8")) as {
         hooks?: Record<string, unknown>;
       };
@@ -287,6 +292,15 @@ describe("omx setup scope behavior", () => {
           2,
         ) + "\n",
       );
+      await writeFile(
+        join(codexDir, "config.toml"),
+        [
+          "[hooks.state.\"custom:/hooks.json:stop:0:0\"]",
+          "trusted_hash = \"sha256:user\"",
+          "enabled = false",
+          "",
+        ].join("\n"),
+      );
 
       const res = runOmx(wd, ["setup", "--scope", "project"], { HOME: home });
       if (shouldSkipForSpawnPermissions(res.error)) return;
@@ -318,6 +332,16 @@ describe("omx setup scope behavior", () => {
       assert.doesNotMatch(
         JSON.stringify(hooksJson),
         /\/old\/dist\/scripts\/codex-native-hook\.js/,
+      );
+      const configToml = await readFile(join(codexDir, "config.toml"), "utf-8");
+      assert.match(
+        configToml,
+        /^\[hooks\.state\."custom:\/hooks\.json:stop:0:0"\]$/m,
+      );
+      assert.match(configToml, /^enabled = false$/m);
+      assert.match(
+        configToml,
+        /^\[hooks\.state\.".*\/\.codex\/hooks\.json:stop:0:0"\]$/m,
       );
     } finally {
       await rm(wd, { recursive: true, force: true });

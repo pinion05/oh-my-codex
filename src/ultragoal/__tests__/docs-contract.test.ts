@@ -12,6 +12,16 @@ function loadDoc(path: string): string {
 }
 
 describe('ultragoal docs contract', () => {
+  it('documents aggregate Codex goal mode as the default contract', () => {
+    const doc = loadDoc('docs/ultragoal.md');
+
+    assert.match(doc, /default to \*\*aggregate Codex goal mode\*\*/i);
+    assert.match(doc, /Codex gets one objective for the whole ultragoal run/i);
+    assert.match(doc, /G001\/G002 story state/i);
+    assert.match(doc, /Intermediate aggregate story checkpoints require a matching `active` Codex snapshot/i);
+    assert.match(doc, /Final aggregate story checkpoints require a matching `complete` Codex snapshot/i);
+  });
+
   it('documents the completed legacy Codex-goal blocked checkpoint workaround', () => {
     const doc = loadDoc('docs/ultragoal.md');
 

@@ -750,6 +750,8 @@ describe("omx setup install mode behavior", () => {
 						);
 						assert.match(config, /^codex_hooks = true$/m);
 						assert.match(config, /^goals = true$/m);
+						assert.match(config, /^\[hooks\.state\.".*hooks\.json:pre_tool_use:0:0"\]$/m);
+						assert.match(config, /^trusted_hash = "sha256:[a-f0-9]{64}"$/m);
 						assert.doesNotMatch(
 							config,
 							/developer_instructions|notify-hook|mcp_servers/,
@@ -941,6 +943,7 @@ describe("omx setup install mode behavior", () => {
 						1,
 					);
 					assert.match(config, /^codex_hooks = true$/m);
+					assert.match(config, /^\[hooks\.state\.".*hooks\.json:pre_tool_use:0:0"\]$/m);
 				});
 			});
 		} finally {

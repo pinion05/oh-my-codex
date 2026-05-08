@@ -6,9 +6,10 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { expect } from './test-helpers.js';
 import fsp from 'fs/promises';
 import path from 'path';
+import fs from 'fs';
 import os from 'os';
 import { lintWiki } from '../lint.js';
-import { writePage, ensureWikiDir } from '../storage.js';
+import { writePage, ensureWikiDir, getLegacyWikiDir, getWikiDir, serializePage } from '../storage.js';
 import { WIKI_SCHEMA_VERSION } from '../types.js';
 import type { WikiPage } from '../types.js';
 
@@ -54,6 +55,23 @@ describe('Wiki Lint', () => {
     const report = lintWiki(tempDir);
     expect(report.issues).toEqual([]);
     expect(report.stats.totalPages).toBe(0);
+  });
+
+
+
+  it('does not create canonical omx_wiki while linting legacy fallback', async () => {
+    await fsp.rm(getWikiDir(tempDir), { recursive: true, force: true });
+    const legacyDir = getLegacyWikiDir(tempDir);
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.writeFileSync(path.join(legacyDir, 'legacy.md'), serializePage(makePage('legacy.md', {
+      title: 'Legacy',
+      content: '\n# Legacy\n\nlegacy lint content\n',
+    })));
+
+    const report = lintWiki(tempDir);
+
+    expect(report.stats.totalPages).toBe(1);
+    expect(fs.existsSync(getWikiDir(tempDir))).toBe(false);
   });
 
   describe('orphan detection', () => {

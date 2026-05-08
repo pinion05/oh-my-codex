@@ -72,7 +72,7 @@ function assertSingleOmxBlock(toml: string): void {
   assert.equal(
     count(toml, /^codex_hooks = true$/gm),
     1,
-    "codex_hooks should appear once",
+    "hooks should appear once",
   );
   assert.equal(
     count(toml, /^notify\s*=/gm),

@@ -376,10 +376,34 @@ describe('config generator', () => {
       assert.match(merged, /^custom_user_flag = false$/m);
       assert.match(merged, /^multi_agent = true$/m);
       assert.match(merged, /^child_agents_md = true$/m);
+      assert.match(merged, /^codex_hooks = true$/m);
       assert.match(merged, /^goals = true$/m);
       assert.doesNotMatch(merged, /^goal\s*=/m);
       assert.match(merged, /^\[user.settings\]$/m);
       assert.match(merged, /^name = "kept"$/m);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves the supported codex_hooks flag and repairs hooks aliases', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-config-gen-'));
+    try {
+      const configPath = join(wd, 'config.toml');
+      const original = [
+        '[features]',
+        'custom_user_flag = false',
+        'hooks = true',
+        '',
+      ].join('\n');
+      await writeFile(configPath, original);
+
+      await mergeConfig(configPath, wd);
+      const merged = await readFile(configPath, 'utf-8');
+
+      assert.match(merged, /^codex_hooks = true$/m);
+      assert.doesNotMatch(merged, /^hooks\s*=/m);
+      assert.match(merged, /^custom_user_flag = false$/m);
     } finally {
       await rm(wd, { recursive: true, force: true });
     }

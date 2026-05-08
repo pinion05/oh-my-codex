@@ -18,10 +18,12 @@ import { AGENT_DEFINITIONS } from "../agents/definitions.js";
 import { DEFAULT_FRONTIER_MODEL } from "./models.js";
 import type { UnifiedMcpRegistryServer } from "./mcp-registry.js";
 import { getOmxFirstPartySetupMcpServers } from "./omx-first-party-mcp.js";
+import { buildManagedCodexHookTrustToml } from "./codex-hooks.js";
 import type { HudPreset } from "../hud/types.js";
 
 interface MergeOptions {
   includeTui?: boolean;
+  codexHooksFile?: string;
   modelOverride?: string;
   sharedMcpServers?: UnifiedMcpRegistryServer[];
   sharedMcpRegistrySource?: string;
@@ -464,15 +466,18 @@ function upsertFeatureFlags(config: string): string {
 
   let multiAgentIdx = -1;
   let childAgentsIdx = -1;
-  let codexHooksIdx = -1;
+  let hooksIdx = -1;
+  let legacyCodexHooksIdx = -1;
   let goalsIdx = -1;
   for (let i = featuresStart + 1; i < sectionEnd; i++) {
     if (/^\s*multi_agent\s*=/.test(lines[i])) {
       multiAgentIdx = i;
     } else if (/^\s*child_agents_md\s*=/.test(lines[i])) {
       childAgentsIdx = i;
+    } else if (/^\s*hooks\s*=/.test(lines[i])) {
+      hooksIdx = i;
     } else if (/^\s*codex_hooks\s*=/.test(lines[i])) {
-      codexHooksIdx = i;
+      legacyCodexHooksIdx = i;
     } else if (/^\s*goals\s*=/.test(lines[i])) {
       goalsIdx = i;
     }
@@ -492,8 +497,15 @@ function upsertFeatureFlags(config: string): string {
     sectionEnd += 1;
   }
 
-  if (codexHooksIdx >= 0) {
-    lines[codexHooksIdx] = "codex_hooks = true";
+  if (hooksIdx >= 0) {
+    lines[hooksIdx] = "codex_hooks = true";
+    if (legacyCodexHooksIdx >= 0) {
+      lines.splice(legacyCodexHooksIdx, 1);
+      sectionEnd -= 1;
+      if (goalsIdx > legacyCodexHooksIdx) goalsIdx -= 1;
+    }
+  } else if (legacyCodexHooksIdx >= 0) {
+    lines[legacyCodexHooksIdx] = "codex_hooks = true";
   } else {
     lines.splice(sectionEnd, 0, "codex_hooks = true");
     sectionEnd += 1;
@@ -506,6 +518,36 @@ function upsertFeatureFlags(config: string): string {
   }
 
   return lines.join("\n");
+}
+
+const OMX_HOOK_TRUST_START_MARKER = "# OMX-owned Codex hook trust state";
+const OMX_HOOK_TRUST_END_MARKER = "# End OMX-owned Codex hook trust state";
+
+export function stripManagedCodexHookTrustState(config: string): string {
+  const blockPattern = new RegExp(
+    `\n?${OMX_HOOK_TRUST_START_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\n[\\s\\S]*?${OMX_HOOK_TRUST_END_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\n?`,
+    "g",
+  );
+  return config.replace(blockPattern, "\n").replace(/\n{3,}/g, "\n\n").trimEnd();
+}
+
+export function upsertManagedCodexHookTrustState(
+  config: string,
+  pkgRoot: string,
+  codexHooksFile: string | undefined,
+): string {
+  const stripped = stripManagedCodexHookTrustState(config);
+  const hookTrustToml = buildManagedCodexHookTrustToml(codexHooksFile, pkgRoot);
+  if (!hookTrustToml) return `${stripped}\n`;
+  return [
+    stripped,
+    "",
+    OMX_HOOK_TRUST_START_MARKER,
+    "# Trusts only setup-managed codex-native-hook.js wrappers.",
+    hookTrustToml,
+    OMX_HOOK_TRUST_END_MARKER,
+    "",
+  ].filter((line, index) => index !== 0 || line.length > 0).join("\n");
 }
 
 export function upsertPluginModeRuntimeFeatureFlags(config: string): string {
@@ -545,18 +587,28 @@ export function upsertPluginModeRuntimeFeatureFlags(config: string): string {
     }
   }
 
-  let codexHooksIdx = -1;
+  let hooksIdx = -1;
+  let legacyCodexHooksIdx = -1;
   let goalsIdx = -1;
   for (let i = featuresStart + 1; i < sectionEnd; i++) {
-    if (/^\s*codex_hooks\s*=/.test(lines[i])) {
-      codexHooksIdx = i;
+    if (/^\s*hooks\s*=/.test(lines[i])) {
+      hooksIdx = i;
+    } else if (/^\s*codex_hooks\s*=/.test(lines[i])) {
+      legacyCodexHooksIdx = i;
     } else if (/^\s*goals\s*=/.test(lines[i])) {
       goalsIdx = i;
     }
   }
 
-  if (codexHooksIdx >= 0) {
-    lines[codexHooksIdx] = "codex_hooks = true";
+  if (hooksIdx >= 0) {
+    lines[hooksIdx] = "codex_hooks = true";
+    if (legacyCodexHooksIdx >= 0) {
+      lines.splice(legacyCodexHooksIdx, 1);
+      sectionEnd--;
+      if (goalsIdx > legacyCodexHooksIdx) goalsIdx--;
+    }
+  } else if (legacyCodexHooksIdx >= 0) {
+    lines[legacyCodexHooksIdx] = "codex_hooks = true";
   } else {
     lines.splice(sectionEnd, 0, "codex_hooks = true");
     sectionEnd++;
@@ -820,6 +872,7 @@ export function stripOmxFeatureFlags(config: string): string {
   const omxFlags = [
     "multi_agent",
     "child_agents_md",
+    "hooks",
     "codex_hooks",
     "goals",
     "goal",
@@ -1389,6 +1442,7 @@ function getOmxTablesBlock(
   pkgRoot: string,
   includeTui = true,
   statusLinePreset: HudPreset = DEFAULT_STATUS_LINE_PRESET,
+  codexHooksFile?: string,
 ): string {
   const lines = [
     "",
@@ -1412,6 +1466,15 @@ function getOmxTablesBlock(
     if (typeof server.startupTimeoutSec === "number") {
       lines.push(`startup_timeout_sec = ${server.startupTimeoutSec}`);
     }
+  }
+
+  const hookTrustToml = buildManagedCodexHookTrustToml(codexHooksFile, pkgRoot);
+  if (hookTrustToml) {
+    lines.push("");
+    lines.push("# OMX-owned Codex hook trust state");
+    lines.push("# Trusts only setup-managed codex-native-hook.js wrappers.");
+    lines.push(hookTrustToml);
+    lines.push("# End OMX-owned Codex hook trust state");
   }
 
   lines.push(
@@ -1442,7 +1505,7 @@ function getOmxTablesBlock(
  *
  * Layout:
  *   1. OMX top-level keys (notify, model_reasoning_effort, developer_instructions)
- *   2. [features] with multi_agent + child_agents_md + codex_hooks + goals
+ *   2. [features] with multi_agent + child_agents_md + hooks + goals
  *   3. [shell_environment_policy.set] with defaulted explore-routing opt-in
  *   4. … user sections …
  *   5. OMX [table] sections (mcp_servers, tui)
@@ -1496,6 +1559,7 @@ export function buildMergedConfig(
     pkgRoot,
     includeTui && !tuiUpsert.hadExistingTui,
     statusLinePreset,
+    options.codexHooksFile,
   );
   const sharedRegistryBlock = getSharedMcpRegistryBlock(
     options.sharedMcpServers ?? [],
