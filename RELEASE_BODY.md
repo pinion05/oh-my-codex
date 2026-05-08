@@ -13,4 +13,8 @@
 
 Local release gates passed: build, no-unused typecheck, targeted setup/config/uninstall/hook Node tests (136/136), native-agent verification, plugin-bundle verification, catalog-doc check, and `cargo test`. GitHub CI remains the final external gate before tag publication.
 
+## Contributors
+
+Thanks to the contributors who made this release possible.
+
 **Full Changelog**: [`v0.16.1...v0.16.2`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.16.1...v0.16.2)
