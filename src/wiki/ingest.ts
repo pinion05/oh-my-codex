@@ -14,7 +14,7 @@ import {
 } from './types.js';
 import {
   withWikiLock,
-  readPage,
+  readCanonicalPage,
   writePageUnsafe,
   updateIndexUnsafe,
   appendLogUnsafe,
@@ -38,7 +38,7 @@ export function ingestKnowledge(root: string, input: WikiIngestInput): WikiInges
   const result: WikiIngestResult = { created: [], updated: [], totalAffected: 0 };
 
   withWikiLock(root, () => {
-    const existing = readPage(root, slug);
+    const existing = readCanonicalPage(root, slug);
 
     if (existing) {
       // Merge into existing page

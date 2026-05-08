@@ -14,7 +14,8 @@ describe("project wiki config/generator documentation contract", () => {
   it("documents the OMX-native storage path instead of legacy OMC storage", () => {
     const doc = loadSurface("docs/reference/project-wiki.md");
     assert.match(doc, /Wiki state is project-local and should live under/i);
-    assert.match(doc, /`\.omx\/wiki\/\*\.md`/);
+    assert.match(doc, /`omx_wiki\/\*\.md`/);
+    assert.match(doc, /legacy `\.omx\/wiki\/`/i);
     assert.match(doc, /The docs and code should never regress back to `\.omc\/wiki\/`/);
   });
 });

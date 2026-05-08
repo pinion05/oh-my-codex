@@ -24,6 +24,8 @@ import { writeSessionStart } from "../../hooks/session.js";
 import { resetTriageConfigCache } from "../../hooks/triage-config.js";
 import { executeStateOperation } from "../../state/operations.js";
 import { OMX_TMUX_HUD_OWNER_ENV } from "../../hud/reconcile.js";
+import { writePage } from "../../wiki/storage.js";
+import { WIKI_SCHEMA_VERSION } from "../../wiki/types.js";
 
 function nativeHookScriptPath(): string {
   return join(process.cwd(), "dist", "scripts", "codex-native-hook.js");
@@ -225,6 +227,8 @@ describe("codex native hook config", () => {
       "PreToolUse",
       "PostToolUse",
       "UserPromptSubmit",
+      "PreCompact",
+      "PostCompact",
       "Stop",
     ]);
 
@@ -511,7 +515,68 @@ describe("codex native hook dispatch", () => {
     assert.equal(mapCodexHookEventToOmxEvent("UserPromptSubmit"), "keyword-detector");
     assert.equal(mapCodexHookEventToOmxEvent("PreToolUse"), "pre-tool-use");
     assert.equal(mapCodexHookEventToOmxEvent("PostToolUse"), "post-tool-use");
+    assert.equal(mapCodexHookEventToOmxEvent("PreCompact"), "pre-compact");
+    assert.equal(mapCodexHookEventToOmxEvent("PostCompact"), "post-compact");
     assert.equal(mapCodexHookEventToOmxEvent("Stop"), "stop");
+  });
+
+
+
+  it("returns bounded wiki context for PreCompact", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-precompact-"));
+    try {
+      writePage(cwd, {
+        filename: "architecture.md",
+        frontmatter: {
+          title: "Architecture",
+          tags: ["architecture"],
+          created: "2026-05-08T00:00:00.000Z",
+          updated: "2026-05-08T00:00:00.000Z",
+          sources: [],
+          links: [],
+          category: "architecture",
+          confidence: "high",
+          schemaVersion: WIKI_SCHEMA_VERSION,
+        },
+        content: "\n# Architecture\n\nCompaction-relevant architecture note.\n",
+      });
+
+      const result = await dispatchCodexNativeHook({
+        hook_event_name: "PreCompact",
+        cwd,
+        session_id: "sess-precompact",
+      });
+
+      assert.equal(result.hookEventName, "PreCompact");
+      assert.equal(result.omxEventName, "pre-compact");
+      const additionalContext = (result.outputJson as { hookSpecificOutput?: { additionalContext?: string } } | null)
+        ?.hookSpecificOutput?.additionalContext ?? "";
+      assert.match(additionalContext, /Wiki: 1 pages/);
+      assert.match(additionalContext, /architecture/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("returns a PostCompact nudge to write compaction artifacts to omx_wiki", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-postcompact-"));
+    try {
+      const result = await dispatchCodexNativeHook({
+        hook_event_name: "PostCompact",
+        cwd,
+        session_id: "sess-postcompact",
+      });
+
+      assert.equal(result.hookEventName, "PostCompact");
+      assert.equal(result.omxEventName, "post-compact");
+      const additionalContext = (result.outputJson as { hookSpecificOutput?: { additionalContext?: string } } | null)
+        ?.hookSpecificOutput?.additionalContext ?? "";
+      assert.match(additionalContext, /PostCompact Nudge/);
+      assert.match(additionalContext, /omx_wiki/);
+      assert.match(additionalContext, /compaction artifacts/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 
   it("writes SessionStart state against the long-lived session owner pid and injects environment context", async () => {

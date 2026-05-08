@@ -70,7 +70,11 @@ import {
 import type { HookEventEnvelope } from "../hooks/extensibility/types.js";
 import { dispatchHookEventRuntime } from "../hooks/extensibility/runtime.js";
 import { reconcileHudForPromptSubmit } from "../hud/reconcile.js";
-import { onSessionStart as buildWikiSessionStartContext } from "../wiki/lifecycle.js";
+import {
+  onPostCompact as buildWikiPostCompactContext,
+  onPreCompact as buildWikiPreCompactContext,
+  onSessionStart as buildWikiSessionStartContext,
+} from "../wiki/lifecycle.js";
 import { readAutoresearchCompletionStatus, readAutoresearchModeStateForActiveDecision } from "../autoresearch/skill-validation.js";
 import { readRunState } from "../runtime/run-state.js";
 import { getRunContinuationSnapshot, shouldContinueRun } from "../runtime/run-loop.js";
@@ -99,6 +103,8 @@ type CodexHookEventName =
   | "PreToolUse"
   | "PostToolUse"
   | "UserPromptSubmit"
+  | "PreCompact"
+  | "PostCompact"
   | "Stop";
 
 type CodexHookPayload = Record<string, unknown>;
@@ -358,6 +364,8 @@ function readHookEventName(payload: CodexHookPayload): CodexHookEventName | null
     || raw === "PreToolUse"
     || raw === "PostToolUse"
     || raw === "UserPromptSubmit"
+    || raw === "PreCompact"
+    || raw === "PostCompact"
     || raw === "Stop"
   ) {
     return raw;
@@ -377,6 +385,10 @@ export function mapCodexHookEventToOmxEvent(
       return "post-tool-use";
     case "UserPromptSubmit":
       return "keyword-detector";
+    case "PreCompact":
+      return "pre-compact";
+    case "PostCompact":
+      return "post-compact";
     case "Stop":
       return "stop";
     default:
@@ -3010,7 +3022,27 @@ export async function dispatchCodexNativeHook(
     });
   }
 
-  if ((hookEventName === "SessionStart" && !skipCanonicalSessionStartContext) || hookEventName === "UserPromptSubmit") {
+  if (hookEventName === "PreCompact") {
+    const compactContext = buildWikiPreCompactContext({ cwd });
+    if (compactContext.additionalContext) {
+      outputJson = {
+        hookSpecificOutput: {
+          hookEventName,
+          additionalContext: compactContext.additionalContext,
+        },
+      };
+    }
+  } else if (hookEventName === "PostCompact") {
+    const compactContext = buildWikiPostCompactContext({ cwd });
+    if (compactContext.additionalContext) {
+      outputJson = {
+        hookSpecificOutput: {
+          hookEventName,
+          additionalContext: compactContext.additionalContext,
+        },
+      };
+    }
+  } else if ((hookEventName === "SessionStart" && !skipCanonicalSessionStartContext) || hookEventName === "UserPromptSubmit") {
     const additionalContext = hookEventName === "SessionStart"
       ? await buildSessionStartContext(cwd, canonicalSessionId || nativeSessionId, {
         hookEventName,

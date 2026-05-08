@@ -24,7 +24,7 @@ import {
   getPackageVersion,
   resolveNativeCacheRoot,
 } from './native-assets.js';
-import { getWikiDir, queryWiki } from '../wiki/index.js';
+import { hasReadableWiki, queryWiki } from '../wiki/index.js';
 import { resolveCodexHomeForLaunch } from './codex-home.js';
 import { runProcessTreeWithTimeout } from '../runtime/process-tree.js';
 
@@ -106,11 +106,10 @@ export interface ExploreSparkShellRoute {
 
 const MAX_WIKI_CONTEXT_RESULTS = 5;
 const WEAK_WIKI_NOTE =
-  'Wiki evidence is weak or missing. Fall back to broader repository search and recommend that the user build an initial project wiki under .omx/wiki/ if this repo benefits from persistent project knowledge.';
+  'Wiki evidence is weak or missing. Fall back to broader repository search and recommend that the user build an initial project wiki under omx_wiki/ if this repo benefits from persistent project knowledge.';
 
 function formatWikiContextBlock(prompt: string, cwd: string): string | null {
-  const wikiDir = getWikiDir(cwd);
-  if (!existsSync(wikiDir)) {
+  if (!hasReadableWiki(cwd)) {
     return [
       '[OMX Wiki Status]',
       WEAK_WIKI_NOTE,

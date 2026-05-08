@@ -5,6 +5,8 @@ export const MANAGED_HOOK_EVENTS = [
   "PreToolUse",
   "PostToolUse",
   "UserPromptSubmit",
+  "PreCompact",
+  "PostCompact",
   "Stop",
 ] as const;
 
@@ -81,6 +83,12 @@ export function buildManagedCodexHooksConfig(
         buildCommandHook(command),
       ],
       UserPromptSubmit: [
+        buildCommandHook(command),
+      ],
+      PreCompact: [
+        buildCommandHook(command),
+      ],
+      PostCompact: [
         buildCommandHook(command),
       ],
       Stop: [

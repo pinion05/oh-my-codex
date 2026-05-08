@@ -8,7 +8,9 @@ import fsp from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { ingestKnowledge } from '../ingest.js';
-import { readPage, readLog } from '../storage.js';
+import { getLegacyWikiDir, getWikiDir, readPage, readLog, serializePage } from '../storage.js';
+import { WIKI_SCHEMA_VERSION } from '../types.js';
+import fs from 'fs';
 
 describe('Wiki Ingest', () => {
   let tempDir: string;
@@ -67,6 +69,43 @@ describe('Wiki Ingest', () => {
       const page = readPage(tempDir, 'linking-page.md');
       expect(page!.frontmatter.links).toContain('auth-architecture.md');
       expect(page!.frontmatter.links).toContain('database-schema.md');
+    });
+
+
+
+    it('does not merge legacy fallback content into canonical pages', () => {
+      const legacyDir = getLegacyWikiDir(tempDir);
+      fs.mkdirSync(legacyDir, { recursive: true });
+      fs.writeFileSync(path.join(legacyDir, 'legacy-title.md'), serializePage({
+        filename: 'legacy-title.md',
+        frontmatter: {
+          title: 'Legacy Title',
+          tags: ['private'],
+          created: '2025-01-01T00:00:00.000Z',
+          updated: '2025-01-01T00:00:00.000Z',
+          sources: [],
+          links: [],
+          category: 'reference',
+          confidence: 'medium',
+          schemaVersion: WIKI_SCHEMA_VERSION,
+        },
+        content: '\n# Legacy Title\n\nprivate legacy content\n',
+      }));
+
+      const result = ingestKnowledge(tempDir, {
+        title: 'Legacy Title',
+        content: 'new canonical content',
+        tags: ['public'],
+        category: 'reference',
+      });
+
+      expect(result.created).toEqual(['legacy-title.md']);
+      expect(result.updated).toEqual([]);
+      const canonicalPath = path.join(getWikiDir(tempDir), 'legacy-title.md');
+      expect(fs.existsSync(canonicalPath)).toBe(true);
+      const canonical = fs.readFileSync(canonicalPath, 'utf8');
+      expect(canonical).toContain('new canonical content');
+      expect(canonical).not.toContain('private legacy content');
     });
 
     it('should log the ingest operation', () => {

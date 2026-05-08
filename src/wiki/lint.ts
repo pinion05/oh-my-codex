@@ -16,6 +16,7 @@ import {
 import {
   readAllPages,
   appendLog,
+  isLegacyWikiFallbackActive,
 } from './storage.js';
 
 /**
@@ -34,6 +35,7 @@ import {
  * @returns Lint report with issues and stats
  */
 export function lintWiki(root: string, config: WikiConfig = DEFAULT_WIKI_CONFIG): WikiLintReport {
+  const legacyFallbackActive = isLegacyWikiFallbackActive(root);
   const pages = readAllPages(root);
   const issues: WikiLintIssue[] = [];
   const pageFilenames = new Set(pages.map(p => p.filename));
@@ -122,13 +124,16 @@ export function lintWiki(root: string, config: WikiConfig = DEFAULT_WIKI_CONFIG)
     contradictionCount: issues.filter(i => i.type === 'structural-contradiction').length,
   };
 
-  // Log the lint operation
-  appendLog(root, {
-    timestamp: new Date().toISOString(),
-    operation: 'lint',
-    pagesAffected: [...new Set(issues.map(i => i.page))],
-    summary: `Lint: ${issues.length} issues (${stats.orphanCount} orphan, ${stats.staleCount} stale, ${stats.brokenRefCount} broken, ${stats.contradictionCount} contradictions)`,
-  });
+  // Log the lint operation. Suppress logging while serving legacy fallback so
+  // read-only lint does not create source-visible canonical wiki files.
+  if (!legacyFallbackActive) {
+    appendLog(root, {
+      timestamp: new Date().toISOString(),
+      operation: 'lint',
+      pagesAffected: [...new Set(issues.map(i => i.page))],
+      summary: `Lint: ${issues.length} issues (${stats.orphanCount} orphan, ${stats.staleCount} stale, ${stats.brokenRefCount} broken, ${stats.contradictionCount} contradictions)`,
+    });
+  }
 
   return { issues, stats };
 }

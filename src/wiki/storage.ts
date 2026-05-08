@@ -15,7 +15,7 @@ import {
   writeFileSync,
 } from 'fs';
 import { dirname, join, resolve, sep } from 'path';
-import { omxWikiDir } from '../utils/paths.js';
+import { omxLegacyWikiDir, omxWikiDir } from '../utils/paths.js';
 import {
   type WikiLogEntry,
   type WikiPage,
@@ -77,20 +77,27 @@ export function getWikiDir(root: string): string {
   return omxWikiDir(root);
 }
 
+export function getLegacyWikiDir(root: string): string {
+  return omxLegacyWikiDir(root);
+}
+
+export function isLegacyWikiFallbackActive(root: string): boolean {
+  return !existsSync(getWikiDir(root)) && existsSync(getLegacyWikiDir(root));
+}
+
+
+export function hasReadableWiki(root: string): boolean {
+  return existsSync(getWikiDir(root)) || existsSync(getLegacyWikiDir(root));
+}
+
+function getReadableWikiDir(root: string): string {
+  if (isLegacyWikiFallbackActive(root)) return getLegacyWikiDir(root);
+  return getWikiDir(root);
+}
+
 export function ensureWikiDir(root: string): string {
   const wikiDir = getWikiDir(root);
   mkdirSync(wikiDir, { recursive: true });
-  const omxRoot = join(root, '.omx');
-  mkdirSync(omxRoot, { recursive: true });
-  const gitignorePath = join(omxRoot, '.gitignore');
-  if (existsSync(gitignorePath)) {
-    const content = readFileSync(gitignorePath, 'utf8');
-    if (!content.includes('wiki/')) {
-      atomicWriteFileSync(gitignorePath, `${content.trimEnd()}\nwiki/\n`);
-    }
-  } else {
-    atomicWriteFileSync(gitignorePath, 'wiki/\n');
-  }
   return wikiDir;
 }
 
@@ -212,7 +219,8 @@ function safeWikiPath(wikiDir: string, filename: string): string | null {
   return filePath;
 }
 
-export function readPage(root: string, filename: string): WikiPage | null {
+
+export function readCanonicalPage(root: string, filename: string): WikiPage | null {
   const wikiDir = getWikiDir(root);
   const filePath = safeWikiPath(wikiDir, filename);
   if (!filePath || !existsSync(filePath)) return null;
@@ -230,8 +238,26 @@ export function readPage(root: string, filename: string): WikiPage | null {
   }
 }
 
+export function readPage(root: string, filename: string): WikiPage | null {
+  const wikiDir = getReadableWikiDir(root);
+  const filePath = safeWikiPath(wikiDir, filename);
+  if (!filePath || !existsSync(filePath)) return null;
+
+  try {
+    const parsed = parseFrontmatter(readFileSync(filePath, 'utf8'));
+    if (!parsed) return null;
+    return {
+      filename,
+      frontmatter: parsed.frontmatter,
+      content: parsed.content,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function listPages(root: string): string[] {
-  const wikiDir = getWikiDir(root);
+  const wikiDir = getReadableWikiDir(root);
   if (!existsSync(wikiDir)) return [];
   return readdirSync(wikiDir)
     .filter((entry) => entry.endsWith('.md') && !RESERVED_FILES.has(entry))
@@ -244,13 +270,27 @@ export function readAllPages(root: string): WikiPage[] {
     .filter((page): page is WikiPage => page !== null);
 }
 
+function listCanonicalPages(root: string): string[] {
+  const wikiDir = getWikiDir(root);
+  if (!existsSync(wikiDir)) return [];
+  return readdirSync(wikiDir)
+    .filter((entry) => entry.endsWith('.md') && !RESERVED_FILES.has(entry))
+    .sort();
+}
+
+function readAllCanonicalPages(root: string): WikiPage[] {
+  return listCanonicalPages(root)
+    .map((filename) => readCanonicalPage(root, filename))
+    .filter((page): page is WikiPage => page !== null);
+}
+
 export function readIndex(root: string): string | null {
-  const indexPath = join(getWikiDir(root), INDEX_FILE);
+  const indexPath = join(getReadableWikiDir(root), INDEX_FILE);
   return existsSync(indexPath) ? readFileSync(indexPath, 'utf8') : null;
 }
 
 export function readLog(root: string): string | null {
-  const logPath = join(getWikiDir(root), LOG_FILE);
+  const logPath = join(getReadableWikiDir(root), LOG_FILE);
   return existsSync(logPath) ? readFileSync(logPath, 'utf8') : null;
 }
 
@@ -276,7 +316,7 @@ export function deletePageUnsafe(root: string, filename: string): boolean {
 }
 
 export function updateIndexUnsafe(root: string): void {
-  const pages = readAllPages(root);
+  const pages = readAllCanonicalPages(root);
   const byCategory = new Map<string, WikiPage[]>();
 
   for (const page of pages) {
@@ -324,6 +364,8 @@ export function writePage(root: string, page: WikiPage, options: { allowReserved
 }
 
 export function deletePage(root: string, filename: string): boolean {
+  if (!existsSync(getWikiDir(root))) return false;
+
   return withWikiLock(root, () => {
     const deleted = deletePageUnsafe(root, filename);
     if (deleted) updateIndexUnsafe(root);
