@@ -38,6 +38,7 @@ describe('cli/ultragoal', () => {
   it('prints help with artifact and goal-mode constraints', async () => {
     assert.match(ULTRAGOAL_HELP, /create-goals/);
     assert.match(ULTRAGOAL_HELP, /complete-goals/);
+    assert.match(ULTRAGOAL_HELP, /aggregate mode/);
     assert.match(ULTRAGOAL_HELP, /blocked/);
     assert.match(ULTRAGOAL_HELP, /fresh Codex thread/);
     assert.match(ULTRAGOAL_HELP, /get_goal\/create_goal\/update_goal/);
@@ -51,27 +52,30 @@ describe('cli/ultragoal', () => {
 
       const next = await capture(() => ultragoalCommand(['complete-goals']));
       const output = next.stdout.join('\n');
-      assert.match(output, /Ultragoal active-goal handoff/);
+      assert.match(output, /Ultragoal aggregate-goal handoff/);
       assert.match(output, /create_goal payload/);
-      assert.match(output, /fresh Codex thread/);
-      assert.match(output, /--status blocked/);
+      assert.match(output, /Codex goal = the whole ultragoal run/);
+      assert.doesNotMatch(output, /fresh Codex thread/);
       assert.match(output, /omx ultragoal checkpoint --goal-id G001-first-milestone --status complete/);
 
-      const goals = JSON.parse(await readFile(join(cwd, '.omx/ultragoal/goals.json'), 'utf-8')) as { activeGoalId?: string };
+      const goals = JSON.parse(await readFile(join(cwd, '.omx/ultragoal/goals.json'), 'utf-8')) as { activeGoalId?: string; codexGoalMode?: string; codexObjective?: string };
       assert.equal(goals.activeGoalId, 'G001-first-milestone');
+      assert.equal(goals.codexGoalMode, 'aggregate');
+      assert.match(goals.codexObjective ?? '', /Complete all ultragoal stories/);
     });
   });
 
   it('checkpoints a goal and reports status as json', async () => {
-    await withCwd(async () => {
+    await withCwd(async (cwd) => {
       await capture(() => ultragoalCommand(['create-goals', '--brief', '- First milestone']));
       await capture(() => ultragoalCommand(['complete-goals']));
+      const goals = JSON.parse(await readFile(join(cwd, '.omx/ultragoal/goals.json'), 'utf-8')) as { codexObjective: string };
       const checkpoint = await capture(() => ultragoalCommand([
         'checkpoint',
         '--goal-id', 'G001-first-milestone',
         '--status', 'complete',
         '--evidence', 'tests passed',
-        '--codex-goal-json', '{"goal":{"objective":"First milestone","status":"complete"}}',
+        '--codex-goal-json', JSON.stringify({ goal: { objective: goals.codexObjective, status: 'complete' } }),
         '--json',
       ]));
       assert.equal(checkpoint.exitCode, undefined);
@@ -81,9 +85,10 @@ describe('cli/ultragoal', () => {
   });
 
   it('requires matching complete Codex goal proof before completing a checkpoint', async () => {
-    await withCwd(async () => {
+    await withCwd(async (cwd) => {
       await capture(() => ultragoalCommand(['create-goals', '--brief', '- First milestone']));
       await capture(() => ultragoalCommand(['complete-goals']));
+      const goals = JSON.parse(await readFile(join(cwd, '.omx/ultragoal/goals.json'), 'utf-8')) as { codexObjective: string };
 
       const missing = await capture(() => ultragoalCommand([
         'checkpoint',
@@ -99,7 +104,7 @@ describe('cli/ultragoal', () => {
         '--goal-id', 'G001-first-milestone',
         '--status', 'complete',
         '--evidence', 'tests passed',
-        '--codex-goal-json', '{"goal":{"objective":"First milestone","status":"active"}}',
+        '--codex-goal-json', JSON.stringify({ goal: { objective: goals.codexObjective, status: 'active' } }),
       ]));
       assert.equal(incomplete.exitCode, 1);
       assert.match(incomplete.stderr.join('\n'), /not complete/);
@@ -118,7 +123,7 @@ describe('cli/ultragoal', () => {
 
   it('records blocked legacy Codex-goal checkpoints as non-terminal', async () => {
     await withCwd(async (cwd) => {
-      await capture(() => ultragoalCommand(['create-goals', '--brief', '- First milestone']));
+      await capture(() => ultragoalCommand(['create-goals', '--brief', '- First milestone', '--codex-goal-mode', 'per-story']));
       await capture(() => ultragoalCommand(['complete-goals']));
 
       const blocked = await capture(() => ultragoalCommand([
@@ -143,7 +148,7 @@ describe('cli/ultragoal', () => {
 
   it('does not let blocked checkpoints bypass active Codex-goal mismatch protection', async () => {
     await withCwd(async () => {
-      await capture(() => ultragoalCommand(['create-goals', '--brief', '- First milestone']));
+      await capture(() => ultragoalCommand(['create-goals', '--brief', '- First milestone', '--codex-goal-mode', 'per-story']));
       await capture(() => ultragoalCommand(['complete-goals']));
 
       const blocked = await capture(() => ultragoalCommand([
