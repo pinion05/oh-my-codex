@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -29,6 +29,9 @@ describe('ultragoal artifacts', () => {
       });
 
       assert.equal(plan.goals.length, 3);
+      assert.equal(plan.codexGoalMode, 'aggregate');
+      assert.match(plan.codexObjective ?? '', /Complete all ultragoal stories/);
+      assert.match(plan.codexObjective ?? '', /G001-build-the-cli/);
       assert.equal(plan.goals[0]?.id, 'G001-build-the-cli');
       assert.equal(plan.goals[0]?.status, 'pending');
       assert.equal(await readFile(join(cwd, '.omx/ultragoal/brief.md'), 'utf-8'), '- Build the CLI\n- Add tests\n- Write docs\n');
@@ -38,7 +41,7 @@ describe('ultragoal artifacts', () => {
     });
   });
 
-  it('starts one goal at a time and emits a Codex goal handoff', async () => {
+  it('starts one story at a time and emits an aggregate Codex goal handoff by default', async () => {
     await withTempRepo(async (cwd) => {
       await createUltragoalPlan(cwd, {
         brief: 'brief',
@@ -60,11 +63,12 @@ describe('ultragoal artifacts', () => {
       const instruction = buildCodexGoalInstruction(started.goal!, started.plan);
       assert.match(instruction, /call get_goal/i);
       assert.match(instruction, /call create_goal/i);
-      assert.match(instruction, /different completed legacy\/thread goal/i);
-      assert.match(instruction, /fresh Codex thread/i);
-      assert.match(instruction, /--status blocked/);
-      assert.match(instruction, /update_goal\(\{status: "complete"\}\)/);
+      assert.match(instruction, /Codex goal = the whole ultragoal run/i);
+      assert.match(instruction, /same aggregate objective as active/i);
+      assert.match(instruction, /do not call update_goal yet/i);
+      assert.doesNotMatch(instruction, /fresh Codex thread/i);
       assert.match(instruction, /--codex-goal-json/);
+      assert.match(instruction, /Complete all ultragoal stories/);
       assert.match(instruction, /Complete first milestone/);
       assert.doesNotMatch(instruction, /\/goal\b/);
       assert.doesNotMatch(instruction, /\.\.\/\.\.\/codex/);
@@ -83,14 +87,34 @@ describe('ultragoal artifacts', () => {
       });
 
       const first = await startNextUltragoal(cwd);
+      const aggregateObjective = first.plan.codexObjective!;
+      await assert.rejects(
+        () => checkpointUltragoal(cwd, {
+          goalId: first.goal!.id,
+          status: 'complete',
+          evidence: 'premature aggregate completion',
+          codexGoal: { goal: { objective: aggregateObjective, status: 'complete' } },
+        }),
+        /expected active/,
+      );
       await checkpointUltragoal(cwd, {
         goalId: first.goal!.id,
         status: 'complete',
         evidence: 'unit tests passed',
-        codexGoal: { goal: { objective: first.goal!.objective, status: 'complete' } },
+        codexGoal: { goal: { objective: aggregateObjective, status: 'active' } },
       });
       const second = await startNextUltragoal(cwd);
       assert.equal(second.goal?.id, 'G002-second');
+
+      await assert.rejects(
+        () => checkpointUltragoal(cwd, {
+          goalId: second.goal!.id,
+          status: 'complete',
+          evidence: 'not final yet',
+          codexGoal: { goal: { objective: aggregateObjective, status: 'active' } },
+        }),
+        /not complete/,
+      );
 
       await checkpointUltragoal(cwd, { goalId: second.goal!.id, status: 'failed', evidence: 'blocked' });
       const noPending = await startNextUltragoal(cwd);
@@ -111,10 +135,74 @@ describe('ultragoal artifacts', () => {
     });
   });
 
+  it('requires aggregate Codex goal completion only for the final story', async () => {
+    await withTempRepo(async (cwd) => {
+      await createUltragoalPlan(cwd, {
+        brief: 'brief',
+        goals: [
+          { title: 'First', objective: 'Complete first milestone.' },
+          { title: 'Second', objective: 'Complete second milestone.' },
+        ],
+      });
+
+      const first = await startNextUltragoal(cwd);
+      const aggregateObjective = first.plan.codexObjective!;
+      await checkpointUltragoal(cwd, {
+        goalId: first.goal!.id,
+        status: 'complete',
+        evidence: 'first audit passed',
+        codexGoal: { goal: { objective: aggregateObjective, status: 'active' } },
+      });
+
+      const second = await startNextUltragoal(cwd);
+      await checkpointUltragoal(cwd, {
+        goalId: second.goal!.id,
+        status: 'complete',
+        evidence: 'final audit passed',
+        codexGoal: { goal: { objective: aggregateObjective, status: 'complete' } },
+      });
+
+      const plan = await readUltragoalPlan(cwd);
+      assert.equal(plan.goals.every((goal) => goal.status === 'complete'), true);
+      assert.equal(plan.activeGoalId, undefined);
+    });
+  });
+
+  it('treats existing v1 plans without mode metadata as legacy per-story plans', async () => {
+    await withTempRepo(async (cwd) => {
+      const created = await createUltragoalPlan(cwd, {
+        brief: 'brief',
+        codexGoalMode: 'per_story',
+        goals: [
+          { title: 'First', objective: 'Complete first milestone.' },
+        ],
+      });
+      delete created.codexGoalMode;
+      delete created.codexObjective;
+      await writeFile(join(cwd, '.omx/ultragoal/goals.json'), `${JSON.stringify(created, null, 2)}\n`);
+
+      const first = await startNextUltragoal(cwd);
+      const instruction = buildCodexGoalInstruction(first.goal!, first.plan);
+      assert.match(instruction, /Ultragoal active-goal handoff/);
+      assert.match(instruction, /fresh Codex thread/);
+
+      await checkpointUltragoal(cwd, {
+        goalId: first.goal!.id,
+        status: 'complete',
+        evidence: 'legacy per-story audit passed',
+        codexGoal: { goal: { objective: first.goal!.objective, status: 'complete' } },
+      });
+
+      const plan = await readUltragoalPlan(cwd);
+      assert.equal(plan.goals[0]?.status, 'complete');
+    });
+  });
+
   it('records a completed legacy Codex-goal blocker without failing the active ultragoal', async () => {
     await withTempRepo(async (cwd) => {
       await createUltragoalPlan(cwd, {
         brief: 'brief',
+        codexGoalMode: 'per_story',
         goals: [
           { title: 'First', objective: 'Complete first milestone.' },
         ],
@@ -144,6 +232,7 @@ describe('ultragoal artifacts', () => {
     await withTempRepo(async (cwd) => {
       await createUltragoalPlan(cwd, {
         brief: 'brief',
+        codexGoalMode: 'per_story',
         goals: [
           { title: 'First', objective: 'Complete first milestone.' },
         ],

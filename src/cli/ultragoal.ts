@@ -19,7 +19,7 @@ import {
 export const ULTRAGOAL_HELP = `omx ultragoal - Durable repo-native multi-goal workflow over Codex goal mode
 
 Usage:
-  omx ultragoal create-goals [--brief <text> | --brief-file <path> | --from-stdin] [--goal <title::objective>] [--force] [--json]
+  omx ultragoal create-goals [--brief <text> | --brief-file <path> | --from-stdin] [--goal <title::objective>] [--codex-goal-mode <aggregate|per-story>] [--force] [--json]
   omx ultragoal complete-goals [--retry-failed] [--json]
   omx ultragoal checkpoint --goal-id <id> --status <complete|failed|blocked> [--evidence <text>] [--codex-goal-json <json-or-path>] [--json]
   omx ultragoal status [--codex-goal-json <json-or-path>] [--json]
@@ -36,9 +36,10 @@ Codex goal integration:
   This command cannot directly invoke the interactive /goal tool from a shell.
   complete-goals writes durable state and prints a model-facing handoff that tells
   the active Codex agent when to call get_goal/create_goal/update_goal safely.
-  If a completed legacy thread goal blocks create_goal for the next ultragoal,
-  checkpoint --status blocked records that non-terminal blocker and the handoff
-  should continue in a fresh Codex thread for the same repo/worktree.
+  New plans default to aggregate mode: one Codex goal covers the whole ultragoal
+  run while OMX checkpoints G001/G002 stories in the durable ledger. Legacy
+  per-story plans retain fresh Codex thread blocker handling when a completed thread
+  goal prevents create_goal for the next story.
 `;
 
 function hasFlag(args: readonly string[], flag: string): boolean {
@@ -80,7 +81,7 @@ async function readStdin(): Promise<string> {
 }
 
 function positionalText(args: readonly string[]): string {
-  const valueTaking = new Set(['--brief', '--brief-file', '--goal', '--goal-id', '--status', '--evidence', '--codex-goal-json']);
+  const valueTaking = new Set(['--brief', '--brief-file', '--goal', '--goal-id', '--status', '--evidence', '--codex-goal-json', '--codex-goal-mode']);
   const words: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -93,6 +94,13 @@ function positionalText(args: readonly string[]): string {
 
 function printJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
+}
+
+function normalizeCodexGoalMode(raw: string | undefined): 'aggregate' | 'per_story' | undefined {
+  if (!raw) return undefined;
+  if (raw === 'aggregate') return 'aggregate';
+  if (raw === 'per-story' || raw === 'per_story') return 'per_story';
+  throw new UltragoalError('Invalid --codex-goal-mode; expected aggregate or per-story.');
 }
 
 function printStatus(plan: Awaited<ReturnType<typeof readUltragoalPlan>>): void {
@@ -129,7 +137,12 @@ export async function ultragoalCommand(args: string[]): Promise<void> {
         ?? positionalText(rest);
       if (!brief.trim()) throw new UltragoalError('Missing brief text. Pass --brief, --brief-file, --from-stdin, or positional text.');
       const goals = readRepeated(rest, '--goal').map(parseGoalArg);
-      const plan = await createUltragoalPlan(cwd, { brief, goals, force: hasFlag(rest, '--force') });
+      const plan = await createUltragoalPlan(cwd, {
+        brief,
+        goals,
+        codexGoalMode: normalizeCodexGoalMode(readValue(rest, '--codex-goal-mode')),
+        force: hasFlag(rest, '--force'),
+      });
       if (json) printJson({ ok: true, plan, summary: summarizeUltragoalPlan(plan) });
       else {
         console.log(`ultragoal plan created: ${plan.goals.length} goal(s)`);
@@ -144,10 +157,13 @@ export async function ultragoalCommand(args: string[]): Promise<void> {
       const plan = await readUltragoalPlan(cwd);
       const snapshot = await readCodexGoalSnapshotInput(readValue(rest, '--codex-goal-json'), cwd);
       const activeGoal = plan.goals.find((goal) => goal.id === plan.activeGoalId || goal.status === 'in_progress');
+      const expectedObjective = plan.codexGoalMode === 'aggregate'
+        ? plan.codexObjective
+        : activeGoal?.objective;
       const reconciliation = activeGoal
         ? reconcileCodexGoalSnapshot(snapshot, {
-          expectedObjective: activeGoal.objective,
-          allowedStatuses: ['active', 'complete'],
+          expectedObjective: expectedObjective ?? activeGoal.objective,
+          allowedStatuses: plan.codexGoalMode === 'aggregate' ? ['active'] : ['active', 'complete'],
           requireSnapshot: false,
         })
         : null;

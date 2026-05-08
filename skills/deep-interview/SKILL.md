@@ -365,7 +365,7 @@ Present execution options after artifact generation using explicit handoff contr
 
 Include these product-facing suggestions when they fit the clarified spec, without removing the existing `$ralplan`, `$autopilot`, `$ralph`, and `$team` handoff options:
 
-- **`$ultragoal`** — use for general goal-oriented follow-up when the spec should be converted into durable Codex goals with sequential completion tracking.
+- **`$ultragoal`** — default goal-mode follow-up for implementation or general goal-oriented follow-up specs that should be converted into durable Codex/OMX goals with sequential completion tracking.
 - **`$autoresearch-goal`** — use when the clarified context is a research project: a research question, reference/literature gathering, evaluator-backed analysis, or professor/critic-style deliverable.
 - **`$performance-goal`** — use when the clarified context is an optimization or performance project with measurable speed, latency, throughput, memory, benchmark, or evaluator criteria.
 
@@ -378,7 +378,7 @@ Preserve `$ralph` for persistent single-owner execution/verification and `$team`
 - **Skipped / Already-Satisfied Stages:** Requirements discovery, ambiguity clarification, and early intent-boundary elicitation
 - **Expected Output:** Canonical planning artifacts under `.omx/plans/`, especially `prd-*.md` and `test-spec-*.md`
 - **Best When:** Requirements are clear enough to stop interviewing, but architectural validation / consensus planning is still desirable
-- **Next Recommended Step:** Use the approved planning artifacts with `$autopilot`, `$ralph`, `$team`, or a goal-mode follow-up (`$ultragoal`, `$autoresearch-goal`, `$performance-goal`) depending on whether the next need is direct execution, coordination, durable goals, research validation, or measurable optimization
+- **Next Recommended Step:** Use the approved planning artifacts with `$autopilot`, `$ralph`, `$team`, or `$ultragoal` as the default goal-mode follow-up; choose `$autoresearch-goal` for research validation or `$performance-goal` for measurable optimization
 
 ### 2. **`$autopilot`**
 - **Input Artifact:** `.omx/specs/deep-interview-{slug}.md`
