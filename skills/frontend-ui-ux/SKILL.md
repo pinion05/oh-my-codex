@@ -1,34 +1,12 @@
 ---
 name: frontend-ui-ux
-description: Designer-developer for UI/UX work
+description: Deprecated compatibility shim for designer-led frontend UI/UX work
 ---
 
-# Frontend UI/UX Command
+# Frontend UI/UX compatibility shim
 
-Routes to the designer agent or Gemini MCP for frontend work.
+Hard-deprecated. Do not invoke or route this skill for new work.
 
-## Usage
-
-```
-/frontend-ui-ux <design task>
-```
-
-## Routing
-
-### Preferred: MCP Direct
-Before first MCP tool use, call `ToolSearch("mcp")` to discover deferred MCP tools.
-Use `mcp__g__ask_gemini` with `agent_role: "designer"` for design tasks.
-If ToolSearch finds no MCP tools, use the Codex agent fallback below.
-
-### Fallback: Codex Agent
-```
-delegate(role="designer", tier="STANDARD", task="{{ARGUMENTS}}")
-```
-
-## Capabilities
-- Component design and implementation
-- Responsive layouts
-- Design system consistency
-- Accessibility compliance
+Use the `designer` agent/lane directly, or use `$visual-ralph` when the task needs visual iteration and screenshot-based verification. This file exists only to preserve the public/catalog-visible `frontend-ui-ux` alias contract while designer-led frontend guidance is handled by the canonical designer surfaces.
 
 Task: {{ARGUMENTS}}
