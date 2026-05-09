@@ -16,7 +16,6 @@ import {
   type ContextPackRoleRefs,
   type ContextPackStatus,
 } from './context-pack-status.js';
-import { omxPlansDir } from '../utils/paths.js';
 
 const PRD_PATTERN = /^prd-.*\.md$/i;
 const TEST_SPEC_PATTERN = /^test-?spec-.*\.md$/i;
@@ -134,7 +133,7 @@ function readMatchingPaths(dir: string, pattern: RegExp): string[] {
 }
 
 export function readPlanningArtifacts(cwd: string): PlanningArtifacts {
-  const plansDir = omxPlansDir(cwd);
+  const plansDir = join(cwd, '.omx', 'plans');
   const specsDir = join(cwd, '.omx', 'specs');
 
   return {

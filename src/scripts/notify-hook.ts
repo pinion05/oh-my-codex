@@ -84,19 +84,51 @@ const RALPH_ACTIVE_PROGRESS_PHASES = new Set([
 
 const IDLE_NOTIFICATION_SUMMARY_MAX_LENGTH = 240;
 
+async function readJsonFileIfObject(path: string): Promise<Record<string, unknown> | null> {
+  try {
+    const raw = await readFile(path, 'utf-8');
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function hasOmxRuntimeStateMarker(value: Record<string, unknown> | null): boolean {
+  if (!value) return false;
+  return typeof value.active === 'boolean'
+    || typeof value.team_name === 'string'
+    || typeof value.current_phase === 'string'
+    || typeof value.lifecycle_outcome === 'string'
+    || typeof value.run_outcome === 'string';
+}
+
+async function hasManagedTeamStateTree(cwd: string): Promise<boolean> {
+  const teamStateRoot = join(cwd, '.omx', 'state', 'team');
+  if (!existsSync(teamStateRoot)) return false;
+  let entries: string[] = [];
+  try {
+    entries = await readdir(teamStateRoot);
+  } catch {
+    return false;
+  }
+  for (const entry of entries) {
+    if (entry.startsWith('.')) continue;
+    const teamDir = join(teamStateRoot, entry);
+    if (existsSync(join(teamDir, 'manifest.v2.json')) || existsSync(join(teamDir, 'config.json'))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function isOmxManagedCwd(cwd: string): Promise<boolean> {
   const trustedInternalCwd = safeString(process.env.OMX_NOTIFY_HOOK_TRUSTED_MANAGED_CWD || '').trim();
   if (trustedInternalCwd && sameFilePath(trustedInternalCwd, cwd)) return true;
   if (existsSync(join(cwd, '.omx', 'setup-scope.json'))) return true;
   if (existsSync(join(cwd, '.omx', 'managed'))) return true;
-  // Runtime-created OMX state/log directories are faithful ownership markers
-  // for existing session/team fixtures even when the older fixtures do not
-  // carry setup-scope.json, .omx/managed, or a fully-populated session.json.
-  // Keep the guard narrow: a plain project without an OMX runtime artifact still
-  // exits before creating .omx, while existing .omx state/log roots continue to
-  // receive hook updates.
-  if (existsSync(join(cwd, '.omx', 'state'))) return true;
-  if (existsSync(join(cwd, '.omx', 'logs'))) return true;
   const sessionStatePath = join(cwd, '.omx', 'state', 'session.json');
   if (existsSync(sessionStatePath)) {
     try {
@@ -106,6 +138,11 @@ async function isOmxManagedCwd(cwd: string): Promise<boolean> {
       // Continue checking other managed markers.
     }
   }
+  const teamState = await readJsonFileIfObject(join(cwd, '.omx', 'state', 'team-state.json'));
+  if (hasOmxRuntimeStateMarker(teamState)) return true;
+  const hudState = await readJsonFileIfObject(join(cwd, '.omx', 'state', 'hud-state.json'));
+  if (hudState && (typeof hudState.last_turn_at === 'string' || typeof hudState.turn_count === 'number')) return true;
+  if (await hasManagedTeamStateTree(cwd)) return true;
   const teamWorkerEnv = safeString(process.env.OMX_TEAM_INTERNAL_WORKER || process.env.OMX_TEAM_WORKER || '').trim();
   if (teamWorkerEnv) {
     const [teamName = '', workerName = ''] = teamWorkerEnv.split('/');

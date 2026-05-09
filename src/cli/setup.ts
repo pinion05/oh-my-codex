@@ -3099,7 +3099,7 @@ async function buildNotifyMergePlan(
 		return { notifyCommand: omxNotify };
 	}
 
-	if (isOmxManagedNotifyCommand(existingNotify)) {
+	if (isOmxManagedNotifyCommand(existingNotify, pkgRoot)) {
 		if (
 			!existingNotify.some((part) =>
 				/(?:^|[\\/])notify-dispatcher\.js$/.test(part),

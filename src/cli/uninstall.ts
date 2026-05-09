@@ -152,7 +152,7 @@ async function restorePreviousNotifyIfDispatcher(
 ): Promise<string> {
   const currentNotify = getRootTomlArray(originalConfig, "notify");
   if (
-    !isOmxManagedNotifyCommand(currentNotify) ||
+    !isOmxManagedNotifyCommand(currentNotify, getPackageRoot()) ||
     !currentNotify?.some((part) =>
       /(?:^|[\\/])notify-dispatcher\.js$/.test(part),
     )

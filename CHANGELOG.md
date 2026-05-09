@@ -4,6 +4,33 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.16.3] - 2026-05-09
+
+Patch release focused on post-`0.16.2` native-hook/setup/runtime hardening: supported Codex hook feature flags, safer notify ownership, runtime hook-trust mirroring, Team startup-evidence state isolation, approved handoff context, planning context-pack references, stale Ralph resume prevention, and native compact-hook JSON validity.
+
+### Added
+
+- **Approved handoff context for Team workers** — workers receive explicit approved handoff context, ready context-pack role references, and preserved launch signatures/hints.
+
+### Changed
+
+- **Codex hook setup uses the supported feature flag** — generated setup/runtime config now emits `[features].codex_hooks = true` and migrates unsupported feature-table aliases back to the supported key.
+- **Runtime state and planning reads are more local by default** — Team startup evidence, planning artifacts, and delivery logs avoid global OMX state contamination unless an explicit Team state root is configured.
+
+### Fixed
+
+- **User hook/notify ownership** — setup and uninstall preserve user-owned notify/hook state, avoid basename-only managed notify matches, and remap project runtime hook trust to the runtime mirror.
+- **Native hook lifecycle correctness** — PreCompact/PostCompact output remains valid JSON, Windows/global install startup self-updates are deferred, and Codex startup exits are surfaced.
+- **Workflow lifecycle reliability** — stale Ralph sessions no longer auto-resume, blocked autoresearch Stop reconciliation is explicit, and Team startup-evidence regressions are covered.
+
+### PRs
+
+- #2186, #2190, #2191, #2196, #2200, #2199, #2201, #2202, #2203, #2204, #2207, #2208, #2212, #2213, #2216, #2217, #2220
+
+### Verification
+
+- Release readiness evidence is tracked in `docs/qa/release-readiness-0.16.3.md`.
+
 ## [0.16.2] - 2026-05-08
 
 Post-`0.16.1` release-train correction and workflow hardening: aggregate `$ultragoal` Codex goals, commit-shared wiki/compaction support, session-isolated stateful workflows, setup-owned Codex hook trust state, and a release-review correction for generated hook feature flags.

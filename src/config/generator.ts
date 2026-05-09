@@ -12,7 +12,7 @@
 
 import { readFile, writeFile } from "fs/promises";
 import { existsSync } from "fs";
-import { join } from "path";
+import { isAbsolute, join, resolve } from "path";
 import TOML from "@iarna/toml";
 import { AGENT_DEFINITIONS } from "../agents/definitions.js";
 import { DEFAULT_FRONTIER_MODEL } from "./models.js";
@@ -290,12 +290,22 @@ export function getRootTomlArray(config: string, key: string): string[] | null {
 
 export function isOmxManagedNotifyCommand(
   command: readonly string[] | null | undefined,
+  pkgRoot?: string,
 ): boolean {
   if (!command) return false;
-  return (
-    command.some((part) => /(?:^|[\\/])notify-hook\.js$/.test(part)) ||
-    command.some((part) => /(?:^|[\\/])notify-dispatcher\.js$/.test(part))
-  );
+  const managedScripts = pkgRoot
+    ? new Set([
+        resolve(pkgRoot, "dist", "scripts", "notify-hook.js"),
+        resolve(pkgRoot, "dist", "scripts", "notify-dispatcher.js"),
+      ])
+    : new Set<string>();
+  return command.some((part) => {
+    if (!/(?:^|[\\/])notify-(?:hook|dispatcher)\.js$/.test(part)) return false;
+    if (pkgRoot) {
+      return isAbsolute(part) && managedScripts.has(resolve(part));
+    }
+    return /(?:^|[\\/])oh-my-codex(?:[\\/]|$)/.test(part);
+  });
 }
 
 function getOmxTopLevelLines(
@@ -439,8 +449,24 @@ function stripRootLevelKeys(config: string, keys: readonly string[]): string {
   return result.join("\n");
 }
 
-function stripOrphanedManagedNotify(config: string): string {
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function stripOrphanedManagedNotify(config: string, pkgRoot: string): string {
+  const rootNotify = getRootTomlArray(config, "notify");
+  if (
+    rootNotify &&
+    !isOmxManagedNotifyCommand(rootNotify, pkgRoot)
+  ) {
+    return config;
+  }
+  const managedHookPath = escapeRegExp(resolve(pkgRoot, "dist", "scripts", "notify-hook.js"));
   return config
+    .replace(
+      new RegExp(`^\\s*notify\\s*=\\s*\\["node",\\s*"${managedHookPath}"\\]\\s*$(\\n)?`, "gm"),
+      "",
+    )
     .replace(
       /^\s*notify\s*=\s*\["node",\s*".*notify-hook\.js"\]\s*$(\n)?/gm,
       "",
@@ -475,7 +501,7 @@ function upsertFeatureFlags(config: string): string {
       "[features]",
       "multi_agent = true",
       "child_agents_md = true",
-      "hooks = true",
+      "codex_hooks = true",
       "goals = true",
       "",
     ].join("\n");
@@ -504,8 +530,8 @@ function upsertFeatureFlags(config: string): string {
 
   let multiAgentIdx = -1;
   let childAgentsIdx = -1;
-  let hooksIdx = -1;
-  let legacyCodexHooksIdx = -1;
+  let codexHooksIdx = -1;
+  let unsupportedHooksIdx = -1;
   let goalsIdx = -1;
   for (let i = featuresStart + 1; i < sectionEnd; i++) {
     if (/^\s*multi_agent\s*=/.test(lines[i])) {
@@ -513,9 +539,9 @@ function upsertFeatureFlags(config: string): string {
     } else if (/^\s*child_agents_md\s*=/.test(lines[i])) {
       childAgentsIdx = i;
     } else if (/^\s*hooks\s*=/.test(lines[i])) {
-      hooksIdx = i;
+      unsupportedHooksIdx = i;
     } else if (/^\s*codex_hooks\s*=/.test(lines[i])) {
-      legacyCodexHooksIdx = i;
+      codexHooksIdx = i;
     } else if (/^\s*goals\s*=/.test(lines[i])) {
       goalsIdx = i;
     }
@@ -535,23 +561,23 @@ function upsertFeatureFlags(config: string): string {
     sectionEnd += 1;
   }
 
-  if (hooksIdx >= 0) {
-    lines[hooksIdx] = "hooks = true";
-  } else if (legacyCodexHooksIdx >= 0) {
-    lines[legacyCodexHooksIdx] = "hooks = true";
-    hooksIdx = legacyCodexHooksIdx;
-    legacyCodexHooksIdx = -1;
+  if (codexHooksIdx >= 0) {
+    lines[codexHooksIdx] = "codex_hooks = true";
+  } else if (unsupportedHooksIdx >= 0) {
+    lines[unsupportedHooksIdx] = "codex_hooks = true";
+    codexHooksIdx = unsupportedHooksIdx;
+    unsupportedHooksIdx = -1;
   } else {
-    lines.splice(sectionEnd, 0, "hooks = true");
-    hooksIdx = sectionEnd;
+    lines.splice(sectionEnd, 0, "codex_hooks = true");
+    codexHooksIdx = sectionEnd;
     sectionEnd += 1;
   }
 
   for (let i = sectionEnd - 1; i > featuresStart; i--) {
-    if (i !== hooksIdx && /^\s*codex_hooks\s*=/.test(lines[i])) {
+    if (i !== codexHooksIdx && /^\s*hooks\s*=/.test(lines[i])) {
       lines.splice(i, 1);
       sectionEnd -= 1;
-      if (hooksIdx > i) hooksIdx -= 1;
+      if (codexHooksIdx > i) codexHooksIdx -= 1;
       if (goalsIdx > i) goalsIdx -= 1;
     }
   }
@@ -628,7 +654,7 @@ export function upsertPluginModeRuntimeFeatureFlags(config: string): string {
     const base = config.trimEnd();
     const featureBlock = [
       "[features]",
-      "hooks = true",
+      "codex_hooks = true",
       "goals = true",
       "",
     ].join("\n");
@@ -655,36 +681,36 @@ export function upsertPluginModeRuntimeFeatureFlags(config: string): string {
     }
   }
 
-  let hooksIdx = -1;
-  let legacyCodexHooksIdx = -1;
+  let codexHooksIdx = -1;
+  let unsupportedHooksIdx = -1;
   let goalsIdx = -1;
   for (let i = featuresStart + 1; i < sectionEnd; i++) {
     if (/^\s*hooks\s*=/.test(lines[i])) {
-      hooksIdx = i;
+      unsupportedHooksIdx = i;
     } else if (/^\s*codex_hooks\s*=/.test(lines[i])) {
-      legacyCodexHooksIdx = i;
+      codexHooksIdx = i;
     } else if (/^\s*goals\s*=/.test(lines[i])) {
       goalsIdx = i;
     }
   }
 
-  if (hooksIdx >= 0) {
-    lines[hooksIdx] = "hooks = true";
-  } else if (legacyCodexHooksIdx >= 0) {
-    lines[legacyCodexHooksIdx] = "hooks = true";
-    hooksIdx = legacyCodexHooksIdx;
-    legacyCodexHooksIdx = -1;
+  if (codexHooksIdx >= 0) {
+    lines[codexHooksIdx] = "codex_hooks = true";
+  } else if (unsupportedHooksIdx >= 0) {
+    lines[unsupportedHooksIdx] = "codex_hooks = true";
+    codexHooksIdx = unsupportedHooksIdx;
+    unsupportedHooksIdx = -1;
   } else {
-    lines.splice(sectionEnd, 0, "hooks = true");
-    hooksIdx = sectionEnd;
+    lines.splice(sectionEnd, 0, "codex_hooks = true");
+    codexHooksIdx = sectionEnd;
     sectionEnd++;
   }
 
   for (let i = sectionEnd - 1; i > featuresStart; i--) {
-    if (i !== hooksIdx && /^\s*codex_hooks\s*=/.test(lines[i])) {
+    if (i !== codexHooksIdx && /^\s*hooks\s*=/.test(lines[i])) {
       lines.splice(i, 1);
       sectionEnd--;
-      if (hooksIdx > i) hooksIdx--;
+      if (codexHooksIdx > i) codexHooksIdx--;
       if (goalsIdx > i) goalsIdx--;
     }
   }
@@ -997,7 +1023,7 @@ export function upsertCodexHooksFeatureFlag(config: string): string {
 
   if (featuresStart < 0) {
     const base = config.trimEnd();
-    const featureBlock = ["[features]", "hooks = true", ""].join("\n");
+    const featureBlock = ["[features]", "codex_hooks = true", ""].join("\n");
     return base.length === 0 ? featureBlock : `${base}\n${featureBlock}`;
   }
 
@@ -1009,30 +1035,30 @@ export function upsertCodexHooksFeatureFlag(config: string): string {
     }
   }
 
-  let hooksIdx = -1;
+  let codexHooksIdx = -1;
   for (let i = featuresStart + 1; i < sectionEnd; i++) {
-    if (/^\s*hooks\s*=/.test(lines[i])) {
-      hooksIdx = i;
-      lines[i] = "hooks = true";
+    if (/^\s*codex_hooks\s*=/.test(lines[i])) {
+      codexHooksIdx = i;
+      lines[i] = "codex_hooks = true";
       break;
     }
-    if (hooksIdx < 0 && /^\s*codex_hooks\s*=/.test(lines[i])) {
-      hooksIdx = i;
-      lines[i] = "hooks = true";
+    if (codexHooksIdx < 0 && /^\s*hooks\s*=/.test(lines[i])) {
+      codexHooksIdx = i;
+      lines[i] = "codex_hooks = true";
     }
   }
 
-  if (hooksIdx < 0) {
-    lines.splice(sectionEnd, 0, "hooks = true");
-    hooksIdx = sectionEnd;
+  if (codexHooksIdx < 0) {
+    lines.splice(sectionEnd, 0, "codex_hooks = true");
+    codexHooksIdx = sectionEnd;
     sectionEnd += 1;
   }
 
   for (let i = sectionEnd - 1; i > featuresStart; i--) {
-    if (i !== hooksIdx && /^\s*codex_hooks\s*=/.test(lines[i])) {
+    if (i !== codexHooksIdx && /^\s*hooks\s*=/.test(lines[i])) {
       lines.splice(i, 1);
       sectionEnd -= 1;
-      if (hooksIdx > i) hooksIdx -= 1;
+      if (codexHooksIdx > i) codexHooksIdx -= 1;
     }
   }
 
@@ -1663,8 +1689,16 @@ export function buildMergedConfig(
     existing = stripped.cleaned;
   }
 
+  const userNotifyToPreserve =
+    options.notifyCommand === false &&
+    !isOmxManagedNotifyCommand(getRootTomlArray(existing, "notify"), pkgRoot)
+      ? getRootTomlArray(existing, "notify")
+      : null;
   existing = stripOmxTopLevelKeys(existing);
-  existing = stripOrphanedManagedNotify(existing);
+  if (userNotifyToPreserve) {
+    existing = `${`notify = ${formatTomlStringArray(userNotifyToPreserve)}`}\n${existing.trimStart()}`;
+  }
+  existing = stripOrphanedManagedNotify(existing, pkgRoot);
   existing = stripManagedCodexHookTrustState(existing);
   if (options.modelOverride) {
     existing = stripRootLevelKeys(existing, ["model"]);

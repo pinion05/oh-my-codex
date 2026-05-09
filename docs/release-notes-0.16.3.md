@@ -1,4 +1,4 @@
-# oh-my-codex v0.16.3
+# Release notes — 0.16.3
 
 `0.16.3` is a post-`0.16.2` reliability release for Codex native-hook setup, Team/Ralph runtime state boundaries, approved handoff context, planning context-pack guidance, and release-review blocker fixes discovered before promotion.
 
@@ -8,6 +8,13 @@
 - **User-owned notification hooks are safer across setup/uninstall** — project setup with `notifyCommand: false` preserves non-OMX `notify` commands, managed notify detection no longer relies on basename-only matches, uninstall keeps user hook enablement intact, and Windows/global install hook commands avoid unsafe self-updates.
 - **Team, planning, and approved handoffs are more durable** — approved handoff context is surfaced to workers, ready context-pack role references are exposed, symbolic Team launch signatures survive planning, role-agnostic approved hints are preserved, and Team startup-evidence tests now isolate local state roots from global OMX state.
 - **Ralph/autoresearch/native compact hooks avoid stale or malformed lifecycle behavior** — stale Ralph sessions no longer auto-resume, blocked autoresearch Stop reconciliation is explicit, and PreCompact/PostCompact native hook output remains valid JSON.
+
+## Fixes and compatibility notes
+
+- Project-scope release review fixed hook trust placement and runtime mirror dedupe regressions from the `0.16.2` train.
+- Notify-hook managed-CWD detection no longer treats bare stale `.omx/state` or `.omx/logs` directories as OMX-owned.
+- Planning artifact reads and Team runtime state roots now prefer repository-local `.omx` paths unless an explicit Team state root is configured.
+- The release keeps legacy cleanup/migration coverage for older unsupported hook aliases without documenting them as current setup guidance.
 
 ## Merged PR inventory
 
@@ -35,9 +42,5 @@
 - Local release-review gates: `npm run build`, `npm run lint`, `npm run check:no-unused`, targeted setup/config/uninstall/hook/Team Node tests, and `git diff --check`.
 - Release collateral generated from the `v0.16.2...v0.16.3` compare range and verified with `generate-release-body.js` before tagging.
 - GitHub CI and publication evidence are recorded in `docs/qa/release-readiness-0.16.3.md`.
-
-## Contributors
-
-Thanks to @Yeachan-Heo, @lkraider, and @weathour for the PRs and fixes that made up the `0.16.3` train, plus the release-review work that hardened the final tag.
 
 **Full Changelog**: [`v0.16.2...v0.16.3`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.16.2...v0.16.3)

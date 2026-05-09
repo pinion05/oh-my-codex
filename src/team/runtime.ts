@@ -113,7 +113,7 @@ import { buildTeamWorkerGoalInstruction } from './goal-workflow.js';
 import { synthesizeDelegationPlan } from './delegation-policy.js';
 import { loadRolePrompt } from './role-router.js';
 import { composeRoleInstructionsForRole } from '../agents/native-config.js';
-import { codexPromptsDir, omxStateDir } from '../utils/paths.js';
+import { codexPromptsDir } from '../utils/paths.js';
 import { isTerminalPhase, type TeamPhase, type TerminalPhase } from './orchestrator.js';
 import {
   resolveTeamWorkerLaunchArgs,
@@ -212,7 +212,11 @@ async function syncRootTeamModeStateOnTerminalPhase(
   if (phase !== 'complete' && phase !== 'failed' && phase !== 'cancelled') return;
 
   try {
-    const teamState = await readModeState('team', cwd);
+    const localStatePath = join(resolve(cwd), '.omx', 'state', 'team-state.json');
+    const localTeamState = existsSync(localStatePath)
+      ? JSON.parse(await readFile(localStatePath, 'utf-8')) as Record<string, unknown>
+      : null;
+    const teamState = localTeamState ?? await readModeState('team', cwd);
     if (!teamState) return;
 
     const stateTeamName = typeof teamState.team_name === 'string' ? teamState.team_name.trim() : '';
@@ -233,7 +237,11 @@ async function syncRootTeamModeStateOnTerminalPhase(
       updates.completed_at = new Date().toISOString();
     }
 
-    await updateModeState('team', updates, cwd);
+    if (localTeamState) {
+      await writeFile(localStatePath, JSON.stringify({ ...localTeamState, ...updates }, null, 2), 'utf-8');
+    } else {
+      await updateModeState('team', updates, cwd);
+    }
   } catch {
     // Best-effort compatibility sync only.
   }
@@ -1418,7 +1426,7 @@ export function teamRuntimeTeamRoot(teamName: string, cwd: string): string {
 }
 
 export function teamRuntimeSessionPath(cwd: string): string {
-  return join(omxStateDir(cwd), 'session.json');
+  return join(resolveCanonicalTeamStateRoot(cwd), 'session.json');
 }
 
 function createStartupTimingRecorder(teamName: string, cwd: string): StartupTimingRecorder {
@@ -1567,21 +1575,100 @@ async function assertNestedTeamAllowed(cwd: string): Promise<void> {
 
 type WorkerStartupEvidence = 'task_claim' | 'worker_progress' | 'leader_ack' | 'ready_prompt' | 'none';
 
+function resolveStartupEvidenceStateRoots(cwd: string): string[] {
+  return [...new Set([
+    resolve(cwd, '.omx', 'state'),
+    resolveCanonicalTeamStateRoot(cwd),
+  ])];
+}
+
+async function readStartupEvidenceWorkerStatus(
+  stateRoot: string,
+  teamName: string,
+  workerName: string,
+): Promise<Partial<WorkerStatus>> {
+  try {
+    const raw = await readFile(
+      join(stateRoot, 'team', teamName, 'workers', workerName, 'status.json'),
+      'utf-8',
+    );
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object') return {};
+    return parsed as Partial<WorkerStatus>;
+  } catch {
+    return {};
+  }
+}
+
+async function readStartupEvidenceTeamCreatedAt(
+  stateRoot: string,
+  teamName: string,
+): Promise<number | null> {
+  try {
+    const raw = await readFile(join(stateRoot, 'team', teamName, 'config.json'), 'utf-8');
+    const parsed = JSON.parse(raw) as unknown;
+    const createdAt = parsed && typeof parsed === 'object'
+      ? (parsed as { created_at?: unknown }).created_at
+      : null;
+    if (typeof createdAt !== 'string') return null;
+    const timestamp = Date.parse(createdAt);
+    return Number.isFinite(timestamp) ? timestamp : null;
+  } catch {
+    return null;
+  }
+}
+
+async function hasStartupEvidenceLeaderAck(
+  stateRoot: string,
+  teamName: string,
+  workerName: string,
+): Promise<boolean> {
+  try {
+    const raw = await readFile(
+      join(stateRoot, 'team', teamName, 'mailbox', 'leader-fixed.json'),
+      'utf-8',
+    );
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object') return false;
+    const messages = (parsed as { messages?: unknown }).messages;
+    if (!Array.isArray(messages)) return false;
+    const teamCreatedAt = await readStartupEvidenceTeamCreatedAt(stateRoot, teamName);
+    return messages.some((message) => {
+      if (!message || typeof message !== 'object') return false;
+      if ((message as { from_worker?: unknown }).from_worker !== workerName) return false;
+      if (teamCreatedAt === null) return true;
+      const createdAt = (message as { created_at?: unknown }).created_at;
+      return typeof createdAt === 'string'
+        && Number.isFinite(Date.parse(createdAt))
+        && Date.parse(createdAt) >= teamCreatedAt;
+    });
+  } catch {
+    return false;
+  }
+}
+
 async function readWorkerStartupEvidence(
   teamName: string,
   workerName: string,
   cwd: string,
 ): Promise<WorkerStartupEvidence> {
-  const status = await readWorkerStatus(teamName, workerName, cwd);
-  if (typeof status.current_task_id === 'string' && status.current_task_id.trim() !== '') {
-    return 'task_claim';
+  const stateRoots = resolveStartupEvidenceStateRoots(cwd);
+  for (const stateRoot of stateRoots) {
+    const status = await readStartupEvidenceWorkerStatus(stateRoot, teamName, workerName);
+    if (typeof status.current_task_id === 'string' && status.current_task_id.trim() !== '') {
+      return 'task_claim';
+    }
   }
-  if (status.state === 'working' || status.state === 'blocked' || status.state === 'done' || status.state === 'failed') {
-    return 'worker_progress';
+  for (const stateRoot of stateRoots) {
+    const status = await readStartupEvidenceWorkerStatus(stateRoot, teamName, workerName);
+    if (status.state === 'working' || status.state === 'blocked' || status.state === 'done' || status.state === 'failed') {
+      return 'worker_progress';
+    }
   }
-  const leaderMailbox = await listMailboxMessages(teamName, 'leader-fixed', cwd).catch(() => []);
-  if (leaderMailbox.some((message) => message?.from_worker === workerName)) {
-    return 'leader_ack';
+  for (const stateRoot of stateRoots) {
+    if (await hasStartupEvidenceLeaderAck(stateRoot, teamName, workerName)) {
+      return 'leader_ack';
+    }
   }
   return 'none';
 }
@@ -2231,7 +2318,7 @@ export async function startTeam(
   const workerLaunchMode = resolveTeamWorkerLaunchMode(launchEnv);
   const displayMode = workerLaunchMode === 'interactive' ? 'split_pane' : 'auto';
   const rawIdentityScope = resolveTeamIdentityScope(launchEnv);
-  const resolvedLeaderSessionId = await resolveLeaderSessionId(leaderCwd);
+  const resolvedLeaderSessionId = await resolveLeaderSessionId(leaderCwd, launchEnv);
   const identityScope = rawIdentityScope.source === 'run-id'
     ? (resolvedLeaderSessionId
       ? { ...rawIdentityScope, sessionId: resolvedLeaderSessionId, runId: '' }
@@ -3938,8 +4025,8 @@ async function detectAndCleanStaleTeam(
   await cleanupTeamState(teamName, leaderCwd);
 }
 
-async function resolveLeaderSessionId(cwd: string): Promise<string> {
-  const fromEnv = process.env.OMX_SESSION_ID || process.env.CODEX_SESSION_ID || process.env.SESSION_ID;
+async function resolveLeaderSessionId(cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<string> {
+  const fromEnv = env.OMX_SESSION_ID || env.CODEX_SESSION_ID || env.SESSION_ID;
   if (fromEnv && fromEnv.trim() !== '') return fromEnv.trim();
 
   const p = teamRuntimeSessionPath(cwd);

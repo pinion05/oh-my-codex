@@ -35,7 +35,7 @@ interface MailboxDeps {
     },
     cwd: string,
   ) => Promise<unknown>;
-  readTeamConfig: (teamName: string, cwd: string) => Promise<{ workers: Array<{ name: string }> } | null>;
+  readTeamConfig: (teamName: string, cwd: string) => Promise<{ created_at?: string; workers: Array<{ name: string }> } | null>;
 }
 
 function executeBridgeCommand(cwd: string, command: RuntimeCommand): boolean {
@@ -85,12 +85,20 @@ export async function sendDirectMessage(
         }
       }
     }
+    const config = await deps.readTeamConfig(deps.teamName, deps.cwd).catch(() => null);
+    const teamCreatedAt = typeof config?.created_at === 'string' ? Date.parse(config.created_at) : Number.NaN;
+    const isCurrentTeamMessage = (candidate: TeamMailboxMessage): boolean => {
+      if (!Number.isFinite(teamCreatedAt)) return true;
+      const candidateCreatedAt = Date.parse(candidate.created_at);
+      return Number.isFinite(candidateCreatedAt) && candidateCreatedAt >= teamCreatedAt;
+    };
 
     const existing = dedupeCandidates.find((candidate) =>
       candidate.from_worker === fromWorker
       && candidate.to_worker === toWorker
       && candidate.body === body
-      && !candidate.delivered_at,
+      && !candidate.delivered_at
+      && isCurrentTeamMessage(candidate),
     );
     if (existing) {
       msg = existing;

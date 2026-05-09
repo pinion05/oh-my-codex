@@ -1725,6 +1725,47 @@ describe("project launch scope helpers", () => {
     }
   });
 
+  it("rewrites setup-owned hook trust state for the runtime CODEX_HOME mirror", async () => {
+    const wd = await mkdtemp(join(tmpdir(), "omx-launch-runtime-hook-trust-"));
+    try {
+      const projectCodexHome = join(wd, ".codex");
+      await mkdir(join(wd, ".omx"), { recursive: true });
+      await mkdir(projectCodexHome, { recursive: true });
+      await writeFile(
+        join(wd, ".omx", "setup-scope.json"),
+        JSON.stringify({ scope: "project" }),
+      );
+      await writeFile(join(projectCodexHome, "hooks.json"), '{"hooks":{}}\n');
+      await writeFile(
+        join(projectCodexHome, "config.toml"),
+        [
+          "[features]",
+          "codex_hooks = true",
+          "",
+          "# OMX-owned Codex hook trust state",
+          "# Trusts only setup-managed codex-native-hook.js wrappers.",
+          `[hooks.state."${join(projectCodexHome, "hooks.json")}:pre_tool_use:0:0"]`,
+          'trusted_hash = "stale"',
+          "# End OMX-owned Codex hook trust state",
+          "",
+        ].join("\n"),
+      );
+
+      await prepareCodexHomeForLaunch(wd, "session-trust", {});
+      const runtimeCodexHome = runtimeCodexHomePath(wd, "session-trust");
+      const runtimeConfig = await readFile(join(runtimeCodexHome, "config.toml"), "utf-8");
+
+      assert.match(
+        runtimeConfig,
+        new RegExp(`\\[hooks\\.state\\."${join(runtimeCodexHome, "hooks.json").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:pre_tool_use:0:0"\\]`),
+      );
+      assert.doesNotMatch(runtimeConfig, /trusted_hash = "stale"/);
+      assert.doesNotMatch(runtimeConfig, new RegExp(join(projectCodexHome, "hooks.json").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
   it("uses boxed runtime root for project-scope CODEX_HOME mirrors", async () => {
     const source = await mkdtemp(join(tmpdir(), "omx-launch-boxed-source-"));
     const boxedRoot = await mkdtemp(join(tmpdir(), "omx-launch-boxed-root-"));

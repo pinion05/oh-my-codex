@@ -56,6 +56,7 @@ describe('notify-hook cross-worktree heartbeat resolution', () => {
       const cwd = join(root, 'latest-input-preview');
       await mkdir(join(cwd, '.omx', 'logs'), { recursive: true });
       await mkdir(join(cwd, '.omx', 'state'), { recursive: true });
+      await writeFile(join(cwd, '.omx', 'managed'), 'test fixture managed workspace');
 
       const payload = {
         cwd,

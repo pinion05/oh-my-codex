@@ -1,4 +1,5 @@
 import { appendFile, mkdir } from 'fs/promises';
+import { existsSync } from 'fs';
 import { join } from 'path';
 import { omxLogsDir } from '../utils/paths.js';
 
@@ -70,5 +71,14 @@ export async function appendTeamDeliveryLog(logsDir: string, event: TeamDelivery
 }
 
 export async function appendTeamDeliveryLogForCwd(cwd: string, event: TeamDeliveryLogEvent): Promise<void> {
-  await appendTeamDeliveryLog(omxLogsDir(cwd), event);
+  const primaryLogsDir = omxLogsDir(cwd);
+  await appendTeamDeliveryLog(primaryLogsDir, event);
+
+  const localLogsDir = join(cwd, '.omx', 'logs');
+  if (
+    localLogsDir !== primaryLogsDir
+    && existsSync(join(cwd, '.omx', 'state', 'team'))
+  ) {
+    await appendTeamDeliveryLog(localLogsDir, event);
+  }
 }

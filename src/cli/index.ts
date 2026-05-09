@@ -6,7 +6,7 @@
 import { execFileSync, spawn } from "child_process";
 import { basename, dirname, join, posix, win32 } from "path";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
-import { copyFile, cp, lstat, mkdir, readdir, rm, symlink } from "fs/promises";
+import { copyFile, cp, lstat, mkdir, readFile, readdir, rm, symlink, writeFile } from "fs/promises";
 import { constants as osConstants, homedir } from "os";
 import { setup, SETUP_SCOPES, type SetupInstallMode, type SetupScope } from "./setup.js";
 import { uninstall } from "./uninstall.js";
@@ -111,7 +111,7 @@ import {
 } from "../team/tmux-session.js";
 import { getPackageRoot } from "../utils/package.js";
 import { codexConfigPath, omxRoot, rememberOmxLaunchContext, resolveOmxEntryPath } from "../utils/paths.js";
-import { cleanCodexModelAvailabilityNuxIfNeeded, repairConfigIfNeeded } from "../config/generator.js";
+import { cleanCodexModelAvailabilityNuxIfNeeded, repairConfigIfNeeded, upsertManagedCodexHookTrustState } from "../config/generator.js";
 import { HUD_TMUX_HEIGHT_LINES } from "../hud/constants.js";
 import { OMX_TMUX_HUD_OWNER_ENV } from "../hud/reconcile.js";
 import {
@@ -666,6 +666,23 @@ export async function prepareRuntimeCodexHomeForProjectLaunch(
       continue;
     }
     await linkOrCopyCodexHomeEntry(source, destination);
+  }
+
+  const runtimeConfigPath = join(runtimeCodexHome, "config.toml");
+  const runtimeHooksPath = join(runtimeCodexHome, "hooks.json");
+  if (existsSync(runtimeConfigPath) && existsSync(runtimeHooksPath)) {
+    const runtimeConfig = await readFile(runtimeConfigPath, "utf-8");
+    if (runtimeConfig.includes("# OMX-owned Codex hook trust state")) {
+      await writeFile(
+        runtimeConfigPath,
+        upsertManagedCodexHookTrustState(
+          runtimeConfig,
+          getPackageRoot(),
+          runtimeHooksPath,
+        ),
+        "utf-8",
+      );
+    }
   }
 
   return runtimeCodexHome;

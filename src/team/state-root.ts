@@ -14,7 +14,7 @@ export function resolveCanonicalTeamStateRoot(
   if (typeof explicit === 'string' && explicit.trim() !== '') {
     return resolve(leaderCwd, explicit.trim());
   }
-  return resolve(omxStateDir(leaderCwd));
+  return omxStateDir(leaderCwd);
 }
 
 export interface TeamWorkerIdentityRef {
