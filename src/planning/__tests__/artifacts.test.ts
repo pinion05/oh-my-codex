@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { join, relative } from 'node:path';
+import { basename, join, relative } from 'node:path';
 import {
   decodeApprovedExecutionQuotedValue,
   isPlanningComplete,
@@ -573,6 +573,59 @@ describe('planning artifacts', () => {
     assert.equal(hint?.task, 'Execute alpha');
     assert.equal(hint?.sourcePath, alphaPrdPath);
     assert.deepEqual(hint?.testSpecPaths, [join(plansDir, 'test-spec-alpha.md')]);
+  });
+
+  it('binds approved launch hints through canonical-equivalent requested PRD aliases', async () => {
+    const plansDir = join(tempDir, '.omx', 'plans');
+    await mkdir(plansDir, { recursive: true });
+    const alphaPrdPath = join(plansDir, 'prd-alpha.md');
+    await writeFile(alphaPrdPath, '# Alpha\n\nLaunch via omx ralph "Execute alpha"\n');
+    await writeFile(join(plansDir, 'test-spec-alpha.md'), '# Alpha Test Spec\n');
+    await writeFile(join(plansDir, 'prd-zeta.md'), '# Zeta\n\nLaunch via omx ralph "Execute zeta"\n');
+    await writeFile(join(plansDir, 'test-spec-zeta.md'), '# Zeta Test Spec\n');
+
+    const aliases = [
+      '.omx/plans/prd-alpha.md',
+      'prd-alpha.md',
+      alphaPrdPath,
+      '.omx/plans/../plans/prd-alpha.md',
+      '../plans/prd-alpha.md',
+      join(tempDir, '.omx', 'plans', '..', 'plans', 'prd-alpha.md'),
+    ];
+
+    for (const prdPath of aliases) {
+      const outcome = readApprovedExecutionLaunchHintOutcome(tempDir, 'ralph', { prdPath });
+
+      assert.equal(outcome.status, 'resolved');
+      if (outcome.status !== 'resolved') {
+        throw new Error(`expected resolved hint for alias ${prdPath}`);
+      }
+      assert.equal(outcome.hint.task, 'Execute alpha');
+      assert.equal(outcome.hint.sourcePath, alphaPrdPath);
+      assert.deepEqual(outcome.hint.testSpecPaths, [join(plansDir, 'test-spec-alpha.md')]);
+    }
+  });
+
+  it('does not bind requested PRD aliases that do not resolve to a discovered canonical PRD', async () => {
+    const plansDir = join(tempDir, '.omx', 'plans');
+    await mkdir(plansDir, { recursive: true });
+    await writeFile(join(plansDir, 'prd-alpha.md'), '# Alpha\n\nLaunch via omx ralph "Execute alpha"\n');
+    await writeFile(join(plansDir, 'test-spec-alpha.md'), '# Alpha Test Spec\n');
+
+    const rejectedAliases = [
+      '.omx/plans/prd-missing.md',
+      '../prd-alpha.md',
+      join('..', basename(tempDir), '.omx', 'plans', 'prd-alpha.md'),
+      join(tempDir, '.omx', 'prd-alpha.md'),
+      relative(process.cwd(), join(plansDir, 'prd-alpha.md')),
+    ];
+
+    for (const prdPath of rejectedAliases) {
+      assert.equal(
+        readApprovedExecutionLaunchHintOutcome(tempDir, 'ralph', { prdPath }).status,
+        'absent',
+      );
+    }
   });
 
   it('honors the requested Ralph task when a single plan lists multiple Ralph launch hints', async () => {

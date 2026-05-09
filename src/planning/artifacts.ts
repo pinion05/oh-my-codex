@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import {
   comparePlanningArtifactPaths,
   parsePlanningArtifactFileName,
@@ -181,11 +181,12 @@ function selectPlanningArtifactsBase(
   artifacts: PlanningArtifacts,
   prdPath?: string,
 ): PlanningArtifactSelectionBase {
+  const requestedPrdPath = prdPath == null
+    ? null
+    : resolveRequestedPrdPath(artifacts, prdPath);
   const selectedPrdPath = prdPath == null
     ? selectLatestPlanningArtifactPath(artifacts.prdPaths)
-    : artifacts.prdPaths.includes(prdPath)
-      ? prdPath
-      : null;
+    : requestedPrdPath;
   const slug = selectedPrdPath
     ? planningArtifactSlug(selectedPrdPath, 'prd')
     : null;
@@ -195,6 +196,70 @@ function selectPlanningArtifactsBase(
     testSpecPaths: selectMatchingTestSpecsForPrd(selectedPrdPath, artifacts.testSpecPaths),
     deepInterviewSpecPaths: selectDeepInterviewSpecPathsForSlug(artifacts.deepInterviewSpecPaths, slug),
   };
+}
+
+function resolveRequestedPrdPath(
+  artifacts: PlanningArtifacts,
+  rawPrdPath: string,
+): string | null {
+  const requested = rawPrdPath.trim();
+  if (!requested) {
+    return null;
+  }
+  if (artifacts.prdPaths.includes(requested)) {
+    return requested;
+  }
+
+  const repoRoot = dirname(dirname(artifacts.plansDir));
+  const canonicalByResolvedPath = new Map(
+    artifacts.prdPaths.map((artifactPath) => [resolve(artifactPath), artifactPath]),
+  );
+  const candidatePaths = isAbsolute(requested)
+    ? [resolve(requested)]
+    : [
+      resolveRelativePathWithinRoot(repoRoot, requested, repoRoot),
+      resolveRelativePathWithinRoot(artifacts.plansDir, requested, repoRoot),
+    ];
+
+  for (const candidatePath of candidatePaths) {
+    if (!candidatePath) {
+      continue;
+    }
+    const canonical = canonicalByResolvedPath.get(candidatePath);
+    if (canonical) {
+      return canonical;
+    }
+  }
+  return null;
+}
+
+function resolveRelativePathWithinRoot(
+  baseDir: string,
+  rawPath: string,
+  rootDir: string,
+): string | null {
+  const resolvedRootDir = resolve(rootDir);
+  let currentDir = resolve(baseDir);
+
+  for (const segment of rawPath.split(/[\\/]+/)) {
+    if (!segment || segment === '.') {
+      continue;
+    }
+    if (segment === '..') {
+      if (currentDir === resolvedRootDir) {
+        return null;
+      }
+      const parentDir = dirname(currentDir);
+      if (parentDir === currentDir) {
+        return null;
+      }
+      currentDir = parentDir;
+      continue;
+    }
+    currentDir = join(currentDir, segment);
+  }
+
+  return resolve(currentDir);
 }
 
 function selectPlanningArtifacts(
