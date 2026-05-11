@@ -667,6 +667,152 @@ describe('readAllState canonical skill precedence', () => {
     });
   });
 
+  it('uses OMX_TEAM_STATE_ROOT canonical skill state to suppress stale team-root mode detail', async () => {
+    await withTempRepo('omx-hud-canonical-team-root-', async (cwd) => {
+      const teamStateRoot = join(cwd, 'team-state-root');
+      const sessionId = 'sess-team-root-canonical';
+      const sessionDir = join(teamStateRoot, 'sessions', sessionId);
+      await mkdir(sessionDir, { recursive: true });
+      await writeFile(join(teamStateRoot, 'session.json'), JSON.stringify({ session_id: sessionId, cwd }));
+      await writeFile(join(sessionDir, 'skill-active-state.json'), JSON.stringify({
+        active: false,
+        skill: 'ralplan',
+        phase: 'completed',
+        session_id: sessionId,
+        active_skills: [],
+      }));
+      await writeFile(join(sessionDir, 'ralplan-state.json'), JSON.stringify({
+        active: true,
+        current_phase: 'stale-planning',
+      }));
+
+      const previousTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+      const previousOmxRoot = process.env.OMX_ROOT;
+      const previousOmxStateRoot = process.env.OMX_STATE_ROOT;
+      const previousSessionId = process.env.OMX_SESSION_ID;
+      try {
+        process.env.OMX_TEAM_STATE_ROOT = teamStateRoot;
+        delete process.env.OMX_ROOT;
+        delete process.env.OMX_STATE_ROOT;
+        process.env.OMX_SESSION_ID = sessionId;
+
+        const state = await readAllState(cwd);
+        assert.equal(state.ralplan, null);
+      } finally {
+        if (typeof previousTeamStateRoot === 'string') process.env.OMX_TEAM_STATE_ROOT = previousTeamStateRoot;
+        else delete process.env.OMX_TEAM_STATE_ROOT;
+        if (typeof previousOmxRoot === 'string') process.env.OMX_ROOT = previousOmxRoot;
+        else delete process.env.OMX_ROOT;
+        if (typeof previousOmxStateRoot === 'string') process.env.OMX_STATE_ROOT = previousOmxStateRoot;
+        else delete process.env.OMX_STATE_ROOT;
+        if (typeof previousSessionId === 'string') process.env.OMX_SESSION_ID = previousSessionId;
+        else delete process.env.OMX_SESSION_ID;
+      }
+    });
+  });
+
+  it('uses OMX_TEAM_STATE_ROOT session.json for session-scoped canonical HUD state without OMX_SESSION_ID', async () => {
+    await withTempRepo('omx-hud-canonical-team-root-session-json-', async (cwd) => {
+      const teamStateRoot = join(cwd, 'team-state-root');
+      const sessionId = 'sess-team-root-session-json';
+      const sessionDir = join(teamStateRoot, 'sessions', sessionId);
+      await mkdir(sessionDir, { recursive: true });
+      await writeFile(join(teamStateRoot, 'session.json'), JSON.stringify({ session_id: sessionId, cwd }));
+      await writeFile(join(sessionDir, 'skill-active-state.json'), JSON.stringify({
+        active: true,
+        skill: 'ralplan',
+        phase: 'planning',
+        session_id: sessionId,
+        active_skills: [{ skill: 'ralplan', phase: 'planning', active: true, session_id: sessionId }],
+      }));
+      await writeFile(join(sessionDir, 'ralplan-state.json'), JSON.stringify({
+        active: true,
+        current_phase: 'planning',
+      }));
+      const sourceStateDir = join(cwd, '.omx', 'state');
+      await mkdir(sourceStateDir, { recursive: true });
+      await writeFile(join(sourceStateDir, 'session.json'), JSON.stringify({
+        session_id: 'sess-stale-source-root',
+        cwd: join(cwd, '..', 'other-worktree'),
+      }));
+
+      const previousTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+      const previousOmxRoot = process.env.OMX_ROOT;
+      const previousOmxStateRoot = process.env.OMX_STATE_ROOT;
+      const previousSessionId = process.env.OMX_SESSION_ID;
+      try {
+        process.env.OMX_TEAM_STATE_ROOT = teamStateRoot;
+        delete process.env.OMX_ROOT;
+        delete process.env.OMX_STATE_ROOT;
+        delete process.env.OMX_SESSION_ID;
+
+        const state = await readAllState(cwd);
+        assert.deepEqual(state.ralplan, {
+          active: true,
+          current_phase: 'planning',
+        });
+      } finally {
+        if (typeof previousTeamStateRoot === 'string') process.env.OMX_TEAM_STATE_ROOT = previousTeamStateRoot;
+        else delete process.env.OMX_TEAM_STATE_ROOT;
+        if (typeof previousOmxRoot === 'string') process.env.OMX_ROOT = previousOmxRoot;
+        else delete process.env.OMX_ROOT;
+        if (typeof previousOmxStateRoot === 'string') process.env.OMX_STATE_ROOT = previousOmxStateRoot;
+        else delete process.env.OMX_STATE_ROOT;
+        if (typeof previousSessionId === 'string') process.env.OMX_SESSION_ID = previousSessionId;
+        else delete process.env.OMX_SESSION_ID;
+      }
+    });
+  });
+
+  it('does not let source-root session.json suppress authoritative team-root HUD fallback', async () => {
+    await withTempRepo('omx-hud-canonical-team-root-ignore-source-session-', async (cwd) => {
+      const teamStateRoot = join(cwd, 'team-state-root');
+      await mkdir(teamStateRoot, { recursive: true });
+      await writeFile(join(teamStateRoot, 'skill-active-state.json'), JSON.stringify({
+        active: true,
+        skill: 'ralplan',
+        phase: 'planning',
+        active_skills: [{ skill: 'ralplan', phase: 'planning', active: true }],
+      }));
+      await writeFile(join(teamStateRoot, 'ralplan-state.json'), JSON.stringify({
+        active: true,
+        current_phase: 'planning',
+      }));
+      const sourceStateDir = join(cwd, '.omx', 'state');
+      await mkdir(join(sourceStateDir, 'sessions', 'sess-source-current'), { recursive: true });
+      await writeFile(join(sourceStateDir, 'session.json'), JSON.stringify({
+        session_id: 'sess-source-current',
+        cwd,
+      }));
+
+      const previousTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+      const previousOmxRoot = process.env.OMX_ROOT;
+      const previousOmxStateRoot = process.env.OMX_STATE_ROOT;
+      const previousSessionId = process.env.OMX_SESSION_ID;
+      try {
+        process.env.OMX_TEAM_STATE_ROOT = teamStateRoot;
+        delete process.env.OMX_ROOT;
+        delete process.env.OMX_STATE_ROOT;
+        delete process.env.OMX_SESSION_ID;
+
+        const state = await readAllState(cwd);
+        assert.deepEqual(state.ralplan, {
+          active: true,
+          current_phase: 'planning',
+        });
+      } finally {
+        if (typeof previousTeamStateRoot === 'string') process.env.OMX_TEAM_STATE_ROOT = previousTeamStateRoot;
+        else delete process.env.OMX_TEAM_STATE_ROOT;
+        if (typeof previousOmxRoot === 'string') process.env.OMX_ROOT = previousOmxRoot;
+        else delete process.env.OMX_ROOT;
+        if (typeof previousOmxStateRoot === 'string') process.env.OMX_STATE_ROOT = previousOmxStateRoot;
+        else delete process.env.OMX_STATE_ROOT;
+        if (typeof previousSessionId === 'string') process.env.OMX_SESSION_ID = previousSessionId;
+        else delete process.env.OMX_SESSION_ID;
+      }
+    });
+  });
+
   it('preserves root fallback when no usable session or OMX_SESSION_ID exists', async () => {
     await withTempRepo('omx-hud-canonical-root-fallback-', async (cwd) => {
       const rootStateDir = join(cwd, '.omx', 'state');

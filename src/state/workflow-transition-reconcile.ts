@@ -1,6 +1,6 @@
 import { existsSync } from 'fs';
 import { mkdir, readFile, writeFile } from 'fs/promises';
-import { dirname } from 'path';
+import { dirname, join } from 'path';
 import { getStatePath } from '../mcp/state-paths.js';
 import {
   buildWorkflowTransitionError,
@@ -14,6 +14,7 @@ import {
 import {
   listActiveSkills,
   readVisibleSkillActiveState,
+  readVisibleSkillActiveStateForStateDir,
   syncCanonicalSkillStateForMode,
 } from './skill-active.js';
 import { applyRunOutcomeContract } from '../runtime/run-outcome.js';
@@ -54,8 +55,28 @@ async function readJsonIfExists(
   }
 }
 
-async function visibleTrackedModes(cwd: string, sessionId?: string): Promise<TrackedWorkflowMode[]> {
-  const canonical = await readVisibleSkillActiveState(cwd, sessionId);
+function modeStatePathForRoot(
+  mode: TrackedWorkflowMode,
+  cwd: string,
+  sessionId?: string,
+  baseStateDir?: string,
+): string {
+  if (baseStateDir) {
+    return sessionId
+      ? join(baseStateDir, 'sessions', sessionId, `${mode}-state.json`)
+      : join(baseStateDir, `${mode}-state.json`);
+  }
+  return getStatePath(mode, cwd, sessionId);
+}
+
+async function visibleTrackedModes(
+  cwd: string,
+  sessionId?: string,
+  baseStateDir?: string,
+): Promise<TrackedWorkflowMode[]> {
+  const canonical = baseStateDir
+    ? await readVisibleSkillActiveStateForStateDir(baseStateDir, sessionId)
+    : await readVisibleSkillActiveState(cwd, sessionId);
   const canonicalModes = listActiveSkills(canonical ?? {})
     .filter((entry) => sessionId || safeString(entry.session_id).trim().length === 0)
     .map((entry) => entry.skill)
@@ -63,9 +84,7 @@ async function visibleTrackedModes(cwd: string, sessionId?: string): Promise<Tra
 
   const visibleModes = new Set<TrackedWorkflowMode>(canonicalModes);
   for (const mode of TRACKED_WORKFLOW_MODES) {
-    const candidatePaths = sessionId
-      ? [getStatePath(mode, cwd, sessionId)]
-      : [getStatePath(mode, cwd)];
+    const candidatePaths = [modeStatePathForRoot(mode, cwd, sessionId, baseStateDir)];
     for (const candidatePath of candidatePaths) {
       const state = await readJsonIfExists(candidatePath, {
         mode,
@@ -82,6 +101,7 @@ async function visibleTrackedModes(cwd: string, sessionId?: string): Promise<Tra
 
 async function completeSourceModeState(
   cwd: string,
+  baseStateDir: string | undefined,
   sourceMode: TrackedWorkflowMode,
   destinationMode: TrackedWorkflowMode,
   sessionId: string | undefined,
@@ -89,9 +109,7 @@ async function completeSourceModeState(
   source: string,
 ): Promise<string[]> {
   const transitionMessage = `mode transiting: ${sourceMode} -> ${destinationMode}`;
-  const candidatePaths = sessionId
-    ? [getStatePath(sourceMode, cwd, sessionId)]
-    : [getStatePath(sourceMode, cwd)];
+  const candidatePaths = [modeStatePathForRoot(sourceMode, cwd, sessionId, baseStateDir)];
   const completedPaths: string[] = [];
 
   for (const candidatePath of candidatePaths) {
@@ -130,6 +148,7 @@ async function completeSourceModeState(
 
   await syncCanonicalSkillStateForMode({
     cwd,
+    ...(baseStateDir ? { baseStateDir } : {}),
     mode: sourceMode,
     active: false,
     currentPhase: 'completed',
@@ -149,6 +168,7 @@ export async function reconcileWorkflowTransition(
     sessionId?: string;
     nowIso?: string;
     source?: string;
+    baseStateDir?: string;
     currentModes?: Iterable<string>;
   } = {},
 ): Promise<ReconciledWorkflowTransition> {
@@ -157,10 +177,11 @@ export async function reconcileWorkflowTransition(
     sessionId,
     nowIso = new Date().toISOString(),
     source = 'workflow-transition',
+    baseStateDir,
   } = options;
   const currentModes = options.currentModes
     ? [...options.currentModes].filter(isTrackedWorkflowMode)
-    : await visibleTrackedModes(cwd, sessionId);
+    : await visibleTrackedModes(cwd, sessionId, baseStateDir);
   const decision = evaluateWorkflowTransition(currentModes, requestedMode);
 
   if (!decision.allowed) {
@@ -171,6 +192,7 @@ export async function reconcileWorkflowTransition(
   for (const sourceMode of decision.autoCompleteModes) {
     completedPaths.push(...await completeSourceModeState(
       cwd,
+      baseStateDir,
       sourceMode,
       requestedMode,
       sessionId,

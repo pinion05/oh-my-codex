@@ -29,6 +29,7 @@ import {
   getQuotaUsage,
   normalizeInputMessages,
 } from './notify-hook/payload-parser.js';
+import { getBaseStateDir } from '../mcp/state-paths.js';
 import {
   getScopedStatePath,
   readCurrentSessionId,
@@ -303,7 +304,7 @@ async function main() {
     ? await resolveTeamStateDirForWorker(cwd, parsedTeamWorker)
     : null;
   const workerStateRootResolved = !isTeamWorker || !!resolvedWorkerStateDir;
-  const stateDir = resolvedWorkerStateDir || join(cwd, '.omx', 'state');
+  const stateDir = resolvedWorkerStateDir || getBaseStateDir(cwd);
   const logsDir = join(cwd, '.omx', 'logs');
   const omxDir = join(cwd, '.omx');
   let currentOmxSessionId = '';
@@ -621,6 +622,7 @@ async function main() {
     if (latestUserInput) {
         await recordSkillActivation({
           stateDir,
+          sourceCwd: cwd,
           text: latestUserInput,
           sessionId: getEffectiveSessionId(),
           threadId: payloadThreadId,

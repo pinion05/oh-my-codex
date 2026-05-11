@@ -6,10 +6,10 @@ import { pathToFileURL } from "url";
 import { readModeState, readModeStateForActiveDecision, readModeStateForSession, updateModeState } from "../modes/base.js";
 import {
   extractSessionIdFromInitializedStatePath,
-  getSkillActiveStatePaths,
+  getSkillActiveStatePathsForStateDir,
   listActiveSkills,
   readSkillActiveState,
-  readVisibleSkillActiveState,
+  readVisibleSkillActiveStateForStateDir,
   type SkillActiveStateLike,
 } from "../state/skill-active.js";
 import {
@@ -35,7 +35,7 @@ import {
 } from "../team/state.js";
 import { omxNotepadPath, omxProjectMemoryPath } from "../utils/paths.js";
 import { findGitLayout } from "../utils/git-layout.js";
-import { getStateFilePath, getStatePath } from "../mcp/state-paths.js";
+import { getBaseStateDir, getStateFilePath, getStatePath } from "../mcp/state-paths.js";
 import {
   detectKeywords,
   detectPrimaryKeyword,
@@ -559,8 +559,8 @@ async function readCanonicalTerminalRunStateForStop(
   return shouldHonorCanonicalTerminalRunState(runRecord, mode) ? runRecord : null;
 }
 
-async function isVisibleRalphActiveForSession(cwd: string, sessionId: string): Promise<boolean> {
-  const canonicalState = await readVisibleSkillActiveState(cwd, sessionId);
+async function isVisibleRalphActiveForSession(stateDir: string, sessionId: string): Promise<boolean> {
+  const canonicalState = await readVisibleSkillActiveStateForStateDir(stateDir, sessionId);
   if (!canonicalState) return false;
   return listActiveSkills(canonicalState).some((entry) => (
     entry.skill === "ralph"
@@ -568,8 +568,8 @@ async function isVisibleRalphActiveForSession(cwd: string, sessionId: string): P
   ));
 }
 
-async function hasConsistentRalphSkillActivation(cwd: string, sessionId: string): Promise<boolean> {
-  const canonicalState = await readVisibleSkillActiveState(cwd, sessionId);
+async function hasConsistentRalphSkillActivation(stateDir: string, sessionId: string): Promise<boolean> {
+  const canonicalState = await readVisibleSkillActiveStateForStateDir(stateDir, sessionId);
   if (!canonicalState) return true;
 
   const initializedMode = safeString(canonicalState.initialized_mode).trim();
@@ -582,6 +582,7 @@ async function hasConsistentRalphSkillActivation(cwd: string, sessionId: string)
 }
 
 async function readActiveRalphState(
+  cwd: string,
   stateDir: string,
   preferredSessionId?: string,
   ownerContext?: {
@@ -590,7 +591,6 @@ async function readActiveRalphState(
     tmuxPaneId?: string;
   },
 ): Promise<ActiveRalphStopState | null> {
-  const cwd = resolve(stateDir, "..", "..");
   const [rawSessionInfo, usableSessionInfo] = await Promise.all([
     readSessionState(cwd),
     readUsableSessionState(cwd),
@@ -620,7 +620,7 @@ async function readActiveRalphState(
     if (
       sessionScoped?.active === true
       && isRalphStartingPhase(sessionScoped)
-      && !(await isVisibleRalphActiveForSession(cwd, sessionId))
+      && !(await isVisibleRalphActiveForSession(stateDir, sessionId))
     ) {
       continue;
     }
@@ -634,7 +634,7 @@ async function readActiveRalphState(
         currentNativeSessionId,
         tmuxPaneId: safeString(ownerContext?.tmuxPaneId).trim(),
       })
-      && await hasConsistentRalphSkillActivation(cwd, sessionId)
+      && await hasConsistentRalphSkillActivation(stateDir, sessionId)
     ) {
       return { state: sessionScoped, path: sessionScopedPath };
     }
@@ -1480,7 +1480,7 @@ async function resolveTeamWorkerStopDecision(
   const blockWorkerStop = (
     reasonCode: string,
     detail: string,
-    stateDirForDecision = join(cwd, ".omx", "state"),
+    stateDirForDecision = getBaseStateDir(cwd),
   ): TeamWorkerStopDecision => ({
     kind: "blocked",
     stateDir: stateDirForDecision,
@@ -1698,6 +1698,7 @@ async function buildGoalWorkflowReconciliationStopOutput(
 
 async function readTeamModeStateForStop(
   cwd: string,
+  stateDir: string,
   sessionId?: string,
 ): Promise<Record<string, unknown> | null> {
   const normalizedSessionId = safeString(sessionId).trim();
@@ -1705,10 +1706,10 @@ async function readTeamModeStateForStop(
     return await readModeState("team", cwd);
   }
 
-  const scopedState = await readStopSessionPinnedState("team-state.json", cwd, normalizedSessionId);
+  const scopedState = await readStopSessionPinnedState("team-state.json", cwd, normalizedSessionId, stateDir);
   if (scopedState) return scopedState;
 
-  const rootState = await readJsonIfExists(join(cwd, ".omx", "state", "team-state.json"));
+  const rootState = await readJsonIfExists(join(stateDir, "team-state.json"));
   if (rootState?.active !== true) return null;
 
   const ownerSessionId = safeString(rootState.session_id).trim();
@@ -1723,7 +1724,7 @@ async function buildTeamStopOutput(cwd: string, sessionId?: string): Promise<Rec
   if (await readCanonicalTerminalRunStateForStop(cwd, sessionId, "team")) {
     return null;
   }
-  const teamState = await readTeamModeStateForStop(cwd, sessionId);
+  const teamState = await readTeamModeStateForStop(cwd, getBaseStateDir(cwd), sessionId);
   if (teamState?.active !== true) return null;
   const teamName = safeString(teamState.team_name).trim();
   if (teamName) {
@@ -1781,12 +1782,13 @@ function hasReleaseReadinessMode(payload: CodexHookPayload): boolean {
 
 async function hasReleaseReadinessStopMarker(
   cwd: string,
+  stateDir: string,
   sessionId: string,
   teamName: string,
 ): Promise<boolean> {
   if (!sessionId) return false;
 
-  const markerState = await readStopSessionPinnedState("release-readiness-state.json", cwd, sessionId);
+  const markerState = await readStopSessionPinnedState("release-readiness-state.json", cwd, sessionId, stateDir);
   if (markerState?.active !== true || markerState.stable_final_recommendation_emitted !== true) {
     return false;
   }
@@ -1831,8 +1833,11 @@ async function readStopSessionPinnedState(
   fileName: string,
   cwd: string,
   sessionId: string,
+  stateDir?: string,
 ): Promise<Record<string, unknown> | null> {
-  const statePath = getStateFilePath(fileName, cwd, sessionId || undefined);
+  const statePath = stateDir && sessionId
+    ? join(stateDir, "sessions", sessionId, fileName)
+    : getStateFilePath(fileName, cwd, sessionId || undefined);
   return readJsonIfExists(statePath);
 }
 
@@ -1883,11 +1888,12 @@ function modeStateMatchesSkillStopContext(
 
 async function readBlockingSkillForStop(
   cwd: string,
+  stateDir: string,
   sessionId: string,
   threadId: string,
   requiredSkill?: string,
 ): Promise<{ skill: string; phase: string; latestPlanPath?: string; planningComplete?: boolean; runOutcome?: string } | null> {
-  const canonicalState = await readVisibleSkillActiveState(cwd, sessionId);
+  const canonicalState = await readVisibleSkillActiveStateForStateDir(stateDir, sessionId);
   const visibleEntries = canonicalState ? listActiveSkills(canonicalState) : [];
   const candidateSkills = requiredSkill
     ? [requiredSkill]
@@ -1897,7 +1903,7 @@ async function readBlockingSkillForStop(
     const terminalRunState = await readCanonicalTerminalRunStateForStop(cwd, sessionId, skill);
     if (terminalRunState) continue;
 
-    const modeState = await readStopSessionPinnedState(`${skill}-state.json`, cwd, sessionId);
+    const modeState = await readStopSessionPinnedState(`${skill}-state.json`, cwd, sessionId, stateDir);
     if (!modeState || modeState.active !== true) continue;
     if (!modeStateMatchesSkillStopContext(modeState, cwd, sessionId)) continue;
 
@@ -1957,11 +1963,12 @@ function isTerminalOrInactiveModeState(state: Record<string, unknown> | null): b
 
 async function readSessionScopedModeStateForRootSkill(
   cwd: string,
+  stateDir: string,
   skill: string,
   sessionIds: string[],
 ): Promise<Record<string, unknown> | null> {
   for (const sessionId of sessionIds) {
-    const state = await readJsonIfExists(getStateFilePath(`${skill}-state.json`, cwd, sessionId));
+    const state = await readStopSessionPinnedState(`${skill}-state.json`, cwd, sessionId, stateDir);
     if (state) return state;
   }
   return null;
@@ -1969,9 +1976,10 @@ async function readSessionScopedModeStateForRootSkill(
 
 async function reconcileStaleRootSkillActiveStateForStop(
   cwd: string,
+  stateDir: string,
   sessionId: string,
 ): Promise<void> {
-  const { rootPath } = getSkillActiveStatePaths(cwd);
+  const { rootPath } = getSkillActiveStatePathsForStateDir(stateDir);
   const rootState = await readSkillActiveState(rootPath);
   if (!rootState?.active) return;
 
@@ -1997,7 +2005,7 @@ async function reconcileStaleRootSkillActiveStateForStop(
       initializedSessionId,
       safeString(rootState.session_id),
     ]);
-    const modeState = await readSessionScopedModeStateForRootSkill(cwd, skill, candidateSessionIds);
+    const modeState = await readSessionScopedModeStateForRootSkill(cwd, stateDir, skill, candidateSessionIds);
     if (isTerminalOrInactiveModeState(modeState)) {
       changed = true;
       continue;
@@ -2076,12 +2084,13 @@ function buildRalplanContinuationStatus(
 
 async function readStopAutoNudgePhase(
   cwd: string,
+  stateDir: string,
   sessionId: string,
   threadId: string,
 ): Promise<string> {
   const normalizedSessionId = sessionId.trim();
   if (normalizedSessionId) {
-    const scopedModeState = await readStopSessionPinnedState("deep-interview-state.json", cwd, normalizedSessionId);
+    const scopedModeState = await readStopSessionPinnedState("deep-interview-state.json", cwd, normalizedSessionId, stateDir);
     if (
       scopedModeState?.active === true
       && safeString(scopedModeState.current_phase).trim().toLowerCase() === "intent-first"
@@ -2089,7 +2098,7 @@ async function readStopAutoNudgePhase(
       return "planning";
     }
   } else {
-    const rootModeState = await readJsonIfExists(join(cwd, ".omx", "state", "deep-interview-state.json"));
+    const rootModeState = await readJsonIfExists(join(stateDir, "deep-interview-state.json"));
     if (
       rootModeState?.active === true
       && safeString(rootModeState.current_phase).trim().toLowerCase() === "intent-first"
@@ -2100,7 +2109,7 @@ async function readStopAutoNudgePhase(
 
   if (!normalizedSessionId) return "";
 
-  const canonicalState = await readVisibleSkillActiveState(cwd, normalizedSessionId);
+  const canonicalState = await readVisibleSkillActiveStateForStateDir(stateDir, normalizedSessionId);
   const visibleEntries = canonicalState ? listActiveSkills(canonicalState) : [];
   const deepInterview = visibleEntries.find((entry) => (
     entry.skill === "deep-interview"
@@ -2108,7 +2117,7 @@ async function readStopAutoNudgePhase(
   ));
   if (!deepInterview) return "";
 
-  const modeState = await readStopSessionPinnedState("deep-interview-state.json", cwd, normalizedSessionId);
+  const modeState = await readStopSessionPinnedState("deep-interview-state.json", cwd, normalizedSessionId, stateDir);
   if (!modeState || modeState.active !== true) return "";
 
   const modePhase = safeString(modeState.current_phase).trim().toLowerCase();
@@ -2117,11 +2126,12 @@ async function readStopAutoNudgePhase(
 
 async function buildDeepInterviewQuestionStopOutput(
   cwd: string,
+  stateDir: string,
   sessionId: string,
   threadId: string,
 ): Promise<{ output: Record<string, unknown>; obligationId: string } | null> {
   await reconcileDeepInterviewQuestionEnforcementFromAnsweredRecords(cwd, sessionId);
-  const modeState = await readStopSessionPinnedState("deep-interview-state.json", cwd, sessionId);
+  const modeState = await readStopSessionPinnedState("deep-interview-state.json", cwd, sessionId, stateDir);
   if (!modeState) return null;
 
   const questionEnforcement = safeObject(modeState.question_enforcement);
@@ -2133,7 +2143,7 @@ async function buildDeepInterviewQuestionStopOutput(
     return null;
   }
 
-  const canonicalState = await readVisibleSkillActiveState(cwd, sessionId);
+  const canonicalState = await readVisibleSkillActiveStateForStateDir(stateDir, sessionId);
   if (canonicalState) {
     const blocker = listActiveSkills(canonicalState).find((entry) => (
       entry.skill === "deep-interview"
@@ -2336,9 +2346,10 @@ async function findCanonicalActiveTeamForSession(
 
 async function resolveActiveTeamNameForStop(
   cwd: string,
+  stateDir: string,
   sessionId: string,
 ): Promise<string> {
-  const directState = await readTeamModeStateForStop(cwd, sessionId);
+  const directState = await readTeamModeStateForStop(cwd, stateDir, sessionId);
   const directTeamName = safeString(directState?.team_name).trim();
   if (directState?.active === true && directTeamName) return directTeamName;
 
@@ -2354,12 +2365,12 @@ async function maybeBuildReleaseReadinessFinalizeStopOutput(
 ): Promise<{ matched: boolean; output: Record<string, unknown> | null }> {
   if (!sessionId) return { matched: false, output: null };
 
-  const teamName = await resolveActiveTeamNameForStop(cwd, sessionId);
+  const teamName = await resolveActiveTeamNameForStop(cwd, stateDir, sessionId);
   if (!teamName) return { matched: false, output: null };
 
   const explicitReleaseReadinessContext =
     hasReleaseReadinessMode(payload)
-    || await hasReleaseReadinessStopMarker(cwd, sessionId, teamName);
+    || await hasReleaseReadinessStopMarker(cwd, stateDir, sessionId, teamName);
   if (!explicitReleaseReadinessContext) {
     return { matched: false, output: null };
   }
@@ -2397,10 +2408,11 @@ async function maybeBuildReleaseReadinessFinalizeStopOutput(
 
 async function buildSkillStopOutput(
   cwd: string,
+  stateDir: string,
   sessionId: string,
   threadId: string,
 ): Promise<Record<string, unknown> | null> {
-  const blocker = await readBlockingSkillForStop(cwd, sessionId, threadId);
+  const blocker = await readBlockingSkillForStop(cwd, stateDir, sessionId, threadId);
   if (!blocker) return null;
 
   const subagentSummary = await readSubagentSessionSummary(cwd, sessionId).catch(() => null);
@@ -2547,13 +2559,13 @@ async function buildStopHookOutput(
   const canonicalSessionId = await resolveInternalSessionIdForPayload(cwd, sessionId);
   const threadId = readPayloadThreadId(payload);
   if (canonicalSessionId) {
-    await reconcileStaleRootSkillActiveStateForStop(cwd, canonicalSessionId);
+    await reconcileStaleRootSkillActiveStateForStop(cwd, stateDir, canonicalSessionId);
   }
   const execFollowupOutput = await buildExecFollowupStopOutput(cwd, canonicalSessionId);
   if (execFollowupOutput) return execFollowupOutput;
   const ralphState = options.skipRalphStopBlock === true
     ? null
-    : await readActiveRalphState(stateDir, canonicalSessionId, {
+    : await readActiveRalphState(cwd, stateDir, canonicalSessionId, {
       payloadSessionId: sessionId,
       threadId,
       tmuxPaneId: safeString(process.env.TMUX_PANE).trim(),
@@ -2667,6 +2679,7 @@ async function buildStopHookOutput(
     if (canonicalSessionId) {
       const deepInterviewQuestionOutput = await buildDeepInterviewQuestionStopOutput(
         cwd,
+        stateDir,
         canonicalSessionId,
         threadId,
       );
@@ -2700,7 +2713,7 @@ async function buildStopHookOutput(
         if (repeatedCanonicalTeamOutput) return repeatedCanonicalTeamOutput;
       }
 
-      const skillOutput = await buildSkillStopOutput(cwd, canonicalSessionId, threadId);
+      const skillOutput = await buildSkillStopOutput(cwd, stateDir, canonicalSessionId, threadId);
       if (skillOutput) {
         return await returnPersistentStopBlock(
           payload,
@@ -2730,7 +2743,7 @@ async function buildStopHookOutput(
       );
     }
     const autoNudgeConfig = await loadAutoNudgeConfig();
-    const autoNudgePhase = await readStopAutoNudgePhase(cwd, canonicalSessionId, threadId);
+    const autoNudgePhase = await readStopAutoNudgePhase(cwd, stateDir, canonicalSessionId, threadId);
 
     if (
       autoNudgeConfig.enabled
@@ -2816,7 +2829,9 @@ export async function dispatchCodexNativeHook(
 ): Promise<NativeHookDispatchResult> {
   const hookEventName = readHookEventName(payload);
   const cwd = options.cwd ?? (safeString(payload.cwd).trim() || process.cwd());
-  const stateDir = join(cwd, ".omx", "state");
+  // Native hooks must use the same authoritative runtime state root as HUD/MCP
+  // when boxed/team roots are active; do not bypass it with cwd/.omx/state.
+  const stateDir = getBaseStateDir(cwd);
   await mkdir(stateDir, { recursive: true });
 
   const omxEventName = mapCodexHookEventToOmxEvent(hookEventName);
@@ -2918,6 +2933,7 @@ export async function dispatchCodexNativeHook(
         turnId || undefined,
       ) ?? await recordSkillActivation({
         stateDir,
+        sourceCwd: cwd,
         text: prompt,
         sessionId: sessionIdForState,
         threadId,

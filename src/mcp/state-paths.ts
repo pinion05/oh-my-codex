@@ -1,7 +1,11 @@
 import { delimiter, isAbsolute, join, relative, resolve as resolvePath } from 'path';
 import { existsSync } from 'fs';
-import { readdir } from 'fs/promises';
-import { readUsableSessionState } from '../hooks/session.js';
+import { readFile, readdir } from 'fs/promises';
+import {
+  isSessionStateUsable,
+  readUsableSessionState,
+  type SessionState,
+} from '../hooks/session.js';
 
 export const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 export const STATE_MODE_SEGMENT_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -211,12 +215,37 @@ function readSessionIdFromEnvironment(env: NodeJS.ProcessEnv = process.env): str
   return undefined;
 }
 
+async function readUsableSessionStateFromBaseStateDir(
+  cwd: string,
+  baseStateDir = getBaseStateDir(cwd),
+): Promise<SessionState | null> {
+  const sessionPath = join(baseStateDir, 'session.json');
+  if (!existsSync(sessionPath)) return null;
+
+  try {
+    const content = await readFile(sessionPath, 'utf-8');
+    const state = JSON.parse(content) as SessionState;
+    return isSessionStateUsable(state, cwd) ? state : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function readCurrentSessionId(workingDirectory?: string): Promise<string | undefined> {
   const cwd = resolveWorkingDirectoryForState(workingDirectory);
+  const baseStateDir = getBaseStateDir(cwd);
   const envSessionId = readSessionIdFromEnvironment();
   if (envSessionId) {
     const envScopedDir = getStateDir(cwd, envSessionId);
     if (existsSync(envScopedDir)) return envSessionId;
+  }
+
+  const baseSession = await readUsableSessionStateFromBaseStateDir(cwd, baseStateDir);
+  if (baseSession) return baseSession.session_id;
+
+  const localStateDir = join(cwd, '.omx', 'state');
+  if (resolvePath(baseStateDir) !== resolvePath(localStateDir)) {
+    return undefined;
   }
 
   return (await readUsableSessionState(cwd))?.session_id;

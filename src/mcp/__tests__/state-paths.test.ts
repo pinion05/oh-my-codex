@@ -289,4 +289,59 @@ describe('state paths', () => {
       await rm(wd, { recursive: true, force: true });
     }
   });
+
+  it('resolves current session from authoritative team state root without OMX_SESSION_ID', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-state-paths-team-root-session-'));
+    const teamStateRoot = join(wd, 'team-state-root');
+    const previousTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+    const previousSessionId = process.env.OMX_SESSION_ID;
+    try {
+      process.env.OMX_TEAM_STATE_ROOT = teamStateRoot;
+      delete process.env.OMX_SESSION_ID;
+      await mkdir(join(teamStateRoot, 'sessions', 'sess-team-current'), { recursive: true });
+      await writeFile(join(teamStateRoot, 'session.json'), JSON.stringify({
+        session_id: 'sess-team-current',
+        cwd: wd,
+      }));
+      await mkdir(join(wd, '.omx', 'state'), { recursive: true });
+      await writeFile(join(wd, '.omx', 'state', 'session.json'), JSON.stringify({
+        session_id: 'sess-stale-source-root',
+        cwd: join(wd, '..', 'other-worktree'),
+      }));
+
+      assert.equal(await readCurrentSessionId(wd), 'sess-team-current');
+    } finally {
+      if (typeof previousTeamStateRoot === 'string') process.env.OMX_TEAM_STATE_ROOT = previousTeamStateRoot;
+      else delete process.env.OMX_TEAM_STATE_ROOT;
+      if (typeof previousSessionId === 'string') process.env.OMX_SESSION_ID = previousSessionId;
+      else delete process.env.OMX_SESSION_ID;
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('does not resolve current session from source root when a team state root is authoritative', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-state-paths-ignore-source-session-'));
+    const teamStateRoot = join(wd, 'team-state-root');
+    const previousTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+    const previousSessionId = process.env.OMX_SESSION_ID;
+    try {
+      process.env.OMX_TEAM_STATE_ROOT = teamStateRoot;
+      delete process.env.OMX_SESSION_ID;
+      await mkdir(teamStateRoot, { recursive: true });
+      const sourceStateDir = join(wd, '.omx', 'state');
+      await mkdir(join(sourceStateDir, 'sessions', 'sess-source-current'), { recursive: true });
+      await writeFile(join(sourceStateDir, 'session.json'), JSON.stringify({
+        session_id: 'sess-source-current',
+        cwd: wd,
+      }));
+
+      assert.equal(await readCurrentSessionId(wd), undefined);
+    } finally {
+      if (typeof previousTeamStateRoot === 'string') process.env.OMX_TEAM_STATE_ROOT = previousTeamStateRoot;
+      else delete process.env.OMX_TEAM_STATE_ROOT;
+      if (typeof previousSessionId === 'string') process.env.OMX_SESSION_ID = previousSessionId;
+      else delete process.env.OMX_SESSION_ID;
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
 });

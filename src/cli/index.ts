@@ -71,7 +71,7 @@ export {
 import {
   SKILL_ACTIVE_STATE_MODE,
   extractSessionIdFromInitializedStatePath,
-  getSkillActiveStatePaths,
+  getSkillActiveStatePathsForStateDir,
   listActiveSkills,
   readSkillActiveState,
   syncCanonicalSkillStateForMode,
@@ -2931,7 +2931,7 @@ function postLaunchUniqueStrings(values: string[]): string[] {
 }
 
 async function scrubPostLaunchRootSkillActiveForSession(
-  cwd: string,
+  stateDir: string,
   sessionId: string,
   nowIso: string,
   writeFileFn: typeof import("fs/promises").writeFile,
@@ -2940,7 +2940,7 @@ async function scrubPostLaunchRootSkillActiveForSession(
   const normalizedSessionId = cleanPostLaunchString(sessionId);
   if (!normalizedSessionId) return;
 
-  const { rootPath } = getSkillActiveStatePaths(cwd);
+  const { rootPath } = getSkillActiveStatePathsForStateDir(stateDir);
   const rootState = rootStateBeforeCleanup ?? await readSkillActiveState(rootPath);
   if (!rootState) return;
 
@@ -3012,8 +3012,9 @@ export async function cleanupPostLaunchModeStateFiles(
   const scopedDirs = sessionId
     ? [getStateDir(cwd, sessionId)]
     : [getBaseStateDir(cwd)];
+  const rootStateDir = getBaseStateDir(cwd);
   const rootSkillActiveStateBeforeCleanup = sessionId
-    ? await readSkillActiveState(getSkillActiveStatePaths(cwd).rootPath)
+    ? await readSkillActiveState(getSkillActiveStatePathsForStateDir(rootStateDir).rootPath)
     : null;
 
   for (const stateDir of scopedDirs) {
@@ -3040,6 +3041,7 @@ export async function cleanupPostLaunchModeStateFiles(
             if (isTrackedWorkflowMode(mode)) {
               await syncCanonicalSkillStateForMode({
                 cwd,
+                baseStateDir: rootStateDir,
                 mode,
                 active: false,
                 currentPhase: "cancelled",
@@ -3086,6 +3088,7 @@ export async function cleanupPostLaunchModeStateFiles(
         if (isTrackedWorkflowMode(mode)) {
           await syncCanonicalSkillStateForMode({
             cwd,
+            baseStateDir: rootStateDir,
             mode,
             active: false,
             currentPhase: "cancelled",
@@ -3105,7 +3108,7 @@ export async function cleanupPostLaunchModeStateFiles(
   if (sessionId) {
     try {
       await scrubPostLaunchRootSkillActiveForSession(
-        cwd,
+        rootStateDir,
         sessionId,
         now().toISOString(),
         writeFile,

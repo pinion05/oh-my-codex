@@ -144,6 +144,166 @@ describe('state-server directory initialization', () => {
     }
   });
 
+  it('co-locates boxed tracked mode and canonical skill state under OMX_ROOT', async () => {
+    process.env.OMX_STATE_SERVER_DISABLE_AUTO_START = '1';
+    const previousOmxRoot = process.env.OMX_ROOT;
+    const previousOmxStateRoot = process.env.OMX_STATE_ROOT;
+    const previousTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+    const { handleStateToolCall } = await import('../state-server.js');
+
+    const root = await mkdtemp(join(tmpdir(), 'omx-state-server-boxed-skill-'));
+    const box = join(root, 'box');
+    const wd = join(root, 'source');
+    const sessionId = 'sess-boxed-ralplan';
+    try {
+      await mkdir(wd, { recursive: true });
+      process.env.OMX_ROOT = box;
+      delete process.env.OMX_STATE_ROOT;
+      delete process.env.OMX_TEAM_STATE_ROOT;
+
+      const response = await handleStateToolCall({
+        params: {
+          name: 'state_write',
+          arguments: {
+            workingDirectory: wd,
+            session_id: sessionId,
+            mode: 'ralplan',
+            active: true,
+            current_phase: 'planning',
+          },
+        },
+      });
+
+      assert.equal(response.isError, undefined);
+      const boxedSessionDir = join(box, '.omx', 'state', 'sessions', sessionId);
+      assert.equal(existsSync(join(boxedSessionDir, 'ralplan-state.json')), true);
+      assert.equal(existsSync(join(boxedSessionDir, 'skill-active-state.json')), true);
+      assert.equal(existsSync(join(wd, '.omx', 'state', 'sessions', sessionId, 'ralplan-state.json')), false);
+      assert.equal(existsSync(join(wd, '.omx', 'state', 'sessions', sessionId, 'skill-active-state.json')), false);
+    } finally {
+      if (typeof previousOmxRoot === 'string') process.env.OMX_ROOT = previousOmxRoot;
+      else delete process.env.OMX_ROOT;
+      if (typeof previousOmxStateRoot === 'string') process.env.OMX_STATE_ROOT = previousOmxStateRoot;
+      else delete process.env.OMX_STATE_ROOT;
+      if (typeof previousTeamStateRoot === 'string') process.env.OMX_TEAM_STATE_ROOT = previousTeamStateRoot;
+      else delete process.env.OMX_TEAM_STATE_ROOT;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('co-locates tracked mode and canonical skill state under OMX_TEAM_STATE_ROOT', async () => {
+    process.env.OMX_STATE_SERVER_DISABLE_AUTO_START = '1';
+    const previousOmxRoot = process.env.OMX_ROOT;
+    const previousOmxStateRoot = process.env.OMX_STATE_ROOT;
+    const previousTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+    const { handleStateToolCall } = await import('../state-server.js');
+
+    const root = await mkdtemp(join(tmpdir(), 'omx-state-server-team-skill-'));
+    const teamStateRoot = join(root, 'team-state');
+    const wd = join(root, 'source');
+    const sessionId = 'sess-team-ralplan';
+    try {
+      await mkdir(wd, { recursive: true });
+      delete process.env.OMX_ROOT;
+      delete process.env.OMX_STATE_ROOT;
+      process.env.OMX_TEAM_STATE_ROOT = teamStateRoot;
+
+      const response = await handleStateToolCall({
+        params: {
+          name: 'state_write',
+          arguments: {
+            workingDirectory: wd,
+            session_id: sessionId,
+            mode: 'ralplan',
+            active: true,
+            current_phase: 'planning',
+          },
+        },
+      });
+
+      assert.equal(response.isError, undefined);
+      const teamSessionDir = join(teamStateRoot, 'sessions', sessionId);
+      assert.equal(existsSync(join(teamSessionDir, 'ralplan-state.json')), true);
+      assert.equal(existsSync(join(teamSessionDir, 'skill-active-state.json')), true);
+      assert.equal(existsSync(join(wd, '.omx', 'state', 'sessions', sessionId, 'ralplan-state.json')), false);
+      assert.equal(existsSync(join(wd, '.omx', 'state', 'sessions', sessionId, 'skill-active-state.json')), false);
+    } finally {
+      if (typeof previousOmxRoot === 'string') process.env.OMX_ROOT = previousOmxRoot;
+      else delete process.env.OMX_ROOT;
+      if (typeof previousOmxStateRoot === 'string') process.env.OMX_STATE_ROOT = previousOmxStateRoot;
+      else delete process.env.OMX_STATE_ROOT;
+      if (typeof previousTeamStateRoot === 'string') process.env.OMX_TEAM_STATE_ROOT = previousTeamStateRoot;
+      else delete process.env.OMX_TEAM_STATE_ROOT;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps auto-completed transition canonical state under OMX_TEAM_STATE_ROOT', async () => {
+    process.env.OMX_STATE_SERVER_DISABLE_AUTO_START = '1';
+    const previousOmxRoot = process.env.OMX_ROOT;
+    const previousOmxStateRoot = process.env.OMX_STATE_ROOT;
+    const previousTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+    const { handleStateToolCall } = await import('../state-server.js');
+
+    const root = await mkdtemp(join(tmpdir(), 'omx-state-server-team-transition-'));
+    const teamStateRoot = join(root, 'team-state');
+    const wd = join(root, 'source');
+    const sessionId = 'sess-team-transition';
+    try {
+      await mkdir(wd, { recursive: true });
+      delete process.env.OMX_ROOT;
+      delete process.env.OMX_STATE_ROOT;
+      process.env.OMX_TEAM_STATE_ROOT = teamStateRoot;
+
+      const deepInterview = await handleStateToolCall({
+        params: {
+          name: 'state_write',
+          arguments: {
+            workingDirectory: wd,
+            session_id: sessionId,
+            mode: 'deep-interview',
+            active: true,
+            current_phase: 'interviewing',
+          },
+        },
+      });
+      assert.equal(deepInterview.isError, undefined);
+
+      const ralplan = await handleStateToolCall({
+        params: {
+          name: 'state_write',
+          arguments: {
+            workingDirectory: wd,
+            session_id: sessionId,
+            mode: 'ralplan',
+            active: true,
+            current_phase: 'planning',
+          },
+        },
+      });
+
+      assert.equal(ralplan.isError, undefined);
+      const teamSessionDir = join(teamStateRoot, 'sessions', sessionId);
+      const completedDeepInterview = JSON.parse(
+        await readFile(join(teamSessionDir, 'deep-interview-state.json'), 'utf-8'),
+      ) as { active?: boolean; current_phase?: string };
+      assert.equal(completedDeepInterview.active, false);
+      assert.equal(completedDeepInterview.current_phase, 'completed');
+      assert.equal(existsSync(join(teamSessionDir, 'ralplan-state.json')), true);
+      assert.equal(existsSync(join(teamSessionDir, 'skill-active-state.json')), true);
+      assert.equal(existsSync(join(wd, '.omx', 'state', 'sessions', sessionId, 'deep-interview-state.json')), false);
+      assert.equal(existsSync(join(wd, '.omx', 'state', 'sessions', sessionId, 'skill-active-state.json')), false);
+    } finally {
+      if (typeof previousOmxRoot === 'string') process.env.OMX_ROOT = previousOmxRoot;
+      else delete process.env.OMX_ROOT;
+      if (typeof previousOmxStateRoot === 'string') process.env.OMX_STATE_ROOT = previousOmxStateRoot;
+      else delete process.env.OMX_STATE_ROOT;
+      if (typeof previousTeamStateRoot === 'string') process.env.OMX_TEAM_STATE_ROOT = previousTeamStateRoot;
+      else delete process.env.OMX_TEAM_STATE_ROOT;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('keeps missing state_read side-effect-free without setup', async () => {
     process.env.OMX_STATE_SERVER_DISABLE_AUTO_START = '1';
     const { handleStateToolCall } = await import('../state-server.js');

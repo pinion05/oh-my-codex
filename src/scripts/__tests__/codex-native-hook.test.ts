@@ -24,6 +24,7 @@ import { writeSessionStart } from "../../hooks/session.js";
 import { resetTriageConfigCache } from "../../hooks/triage-config.js";
 import { executeStateOperation } from "../../state/operations.js";
 import { OMX_TMUX_HUD_OWNER_ENV } from "../../hud/reconcile.js";
+import { readAllState } from "../../hud/state.js";
 import { writePage } from "../../wiki/storage.js";
 import { WIKI_SCHEMA_VERSION } from "../../wiki/types.js";
 
@@ -1237,6 +1238,112 @@ describe("codex native hook dispatch", () => {
       assert.equal(existsSync(join(cwd, ".omx", "state", "sessions", "sess-1", "ralplan-state.json")), true);
     } finally {
       await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("records boxed keyword activation mode detail and skill state under OMX_ROOT", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omx-native-hook-boxed-"));
+    const cwd = join(root, "source");
+    const omxRoot = join(root, "box");
+    const sessionId = "sess-boxed-ralplan";
+    const previousOmxRoot = process.env.OMX_ROOT;
+    const previousOmxStateRoot = process.env.OMX_STATE_ROOT;
+    const previousTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+    const previousOmxSessionId = process.env.OMX_SESSION_ID;
+    try {
+      await mkdir(cwd, { recursive: true });
+      process.env.OMX_ROOT = omxRoot;
+      delete process.env.OMX_STATE_ROOT;
+      delete process.env.OMX_TEAM_STATE_ROOT;
+      process.env.OMX_SESSION_ID = sessionId;
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "UserPromptSubmit",
+          cwd,
+          session_id: sessionId,
+          thread_id: "thread-boxed",
+          turn_id: "turn-boxed",
+          prompt: "$ralplan implement issue #1307",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "keyword-detector");
+      assert.equal(result.skillState?.skill, "ralplan");
+
+      const boxedSessionDir = join(omxRoot, ".omx", "state", "sessions", sessionId);
+      assert.equal(existsSync(join(boxedSessionDir, "skill-active-state.json")), true);
+      assert.equal(existsSync(join(boxedSessionDir, "ralplan-state.json")), true);
+      assert.equal(existsSync(join(cwd, ".omx", "state", "sessions", sessionId, "skill-active-state.json")), false);
+      assert.equal(existsSync(join(cwd, ".omx", "state", "sessions", sessionId, "ralplan-state.json")), false);
+
+      const hudState = await readAllState(cwd);
+      assert.equal(hudState.ralplan?.active, true);
+      assert.equal(hudState.ralplan?.current_phase, "planning");
+    } finally {
+      if (typeof previousOmxRoot === "string") process.env.OMX_ROOT = previousOmxRoot;
+      else delete process.env.OMX_ROOT;
+      if (typeof previousOmxStateRoot === "string") process.env.OMX_STATE_ROOT = previousOmxStateRoot;
+      else delete process.env.OMX_STATE_ROOT;
+      if (typeof previousTeamStateRoot === "string") process.env.OMX_TEAM_STATE_ROOT = previousTeamStateRoot;
+      else delete process.env.OMX_TEAM_STATE_ROOT;
+      if (typeof previousOmxSessionId === "string") process.env.OMX_SESSION_ID = previousOmxSessionId;
+      else delete process.env.OMX_SESSION_ID;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("records native keyword activation mode detail and skill state under OMX_TEAM_STATE_ROOT", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omx-native-hook-team-root-"));
+    const cwd = join(root, "source");
+    const teamStateRoot = join(root, "team-state");
+    const sessionId = "sess-team-root-ralplan";
+    const previousOmxRoot = process.env.OMX_ROOT;
+    const previousOmxStateRoot = process.env.OMX_STATE_ROOT;
+    const previousTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+    const previousOmxSessionId = process.env.OMX_SESSION_ID;
+    try {
+      await mkdir(cwd, { recursive: true });
+      delete process.env.OMX_ROOT;
+      delete process.env.OMX_STATE_ROOT;
+      process.env.OMX_TEAM_STATE_ROOT = teamStateRoot;
+      process.env.OMX_SESSION_ID = sessionId;
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "UserPromptSubmit",
+          cwd,
+          session_id: sessionId,
+          thread_id: "thread-team-root",
+          turn_id: "turn-team-root",
+          prompt: "$ralplan implement issue #1307",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "keyword-detector");
+      assert.equal(result.skillState?.skill, "ralplan");
+
+      const teamSessionDir = join(teamStateRoot, "sessions", sessionId);
+      assert.equal(existsSync(join(teamSessionDir, "skill-active-state.json")), true);
+      assert.equal(existsSync(join(teamSessionDir, "ralplan-state.json")), true);
+      assert.equal(existsSync(join(cwd, ".omx", "state", "sessions", sessionId, "skill-active-state.json")), false);
+      assert.equal(existsSync(join(cwd, ".omx", "state", "sessions", sessionId, "ralplan-state.json")), false);
+
+      const hudState = await readAllState(cwd);
+      assert.equal(hudState.ralplan?.active, true);
+      assert.equal(hudState.ralplan?.current_phase, "planning");
+    } finally {
+      if (typeof previousOmxRoot === "string") process.env.OMX_ROOT = previousOmxRoot;
+      else delete process.env.OMX_ROOT;
+      if (typeof previousOmxStateRoot === "string") process.env.OMX_STATE_ROOT = previousOmxStateRoot;
+      else delete process.env.OMX_STATE_ROOT;
+      if (typeof previousTeamStateRoot === "string") process.env.OMX_TEAM_STATE_ROOT = previousTeamStateRoot;
+      else delete process.env.OMX_TEAM_STATE_ROOT;
+      if (typeof previousOmxSessionId === "string") process.env.OMX_SESSION_ID = previousOmxSessionId;
+      else delete process.env.OMX_SESSION_ID;
+      await rm(root, { recursive: true, force: true });
     }
   });
 
@@ -6246,6 +6353,41 @@ exit 0
         systemMessage: "OMX team pipeline is still active at phase team-exec.",
       });
       assert.equal(existsSync(join(sharedRoot, "team", "canonical-root-team", "phase.json")), true);
+    } finally {
+      if (typeof priorTeamStateRoot === "string") process.env.OMX_TEAM_STATE_ROOT = priorTeamStateRoot;
+      else delete process.env.OMX_TEAM_STATE_ROOT;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores stale source-root team Stop fallback when OMX_TEAM_STATE_ROOT is authoritative", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-team-stale-source-root-"));
+    const teamStateRoot = join(cwd, "shared-team-state");
+    const priorTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+    try {
+      process.env.OMX_TEAM_STATE_ROOT = teamStateRoot;
+      await mkdir(join(cwd, ".omx", "state"), { recursive: true });
+      await mkdir(join(teamStateRoot, "team", "stale-source-team"), { recursive: true });
+      await writeJson(join(cwd, ".omx", "state", "team-state.json"), {
+        active: true,
+        team_name: "stale-source-team",
+        current_phase: "team-exec",
+      });
+      await writeJson(join(teamStateRoot, "team", "stale-source-team", "phase.json"), {
+        current_phase: "team-exec",
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "sess-stale-source-team",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.equal(result.outputJson, null);
     } finally {
       if (typeof priorTeamStateRoot === "string") process.env.OMX_TEAM_STATE_ROOT = priorTeamStateRoot;
       else delete process.env.OMX_TEAM_STATE_ROOT;
