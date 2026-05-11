@@ -1,7 +1,7 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { extname, isAbsolute, relative, resolve } from 'node:path';
 
-const PASSING_VALUES = new Set(['pass', 'passed', 'approve', 'approved', 'complete', 'completed', 'ok', 'success', 'succeeded']);
+const JSON_EXTENSION = '.json';
 
 export interface RalphCompletionAuditResult {
   complete: boolean;
@@ -18,12 +18,12 @@ function safeString(value: unknown): string {
 }
 
 function hasPassingVerdict(value: Record<string, unknown>): boolean {
-  if (value.passed === true || value.approved === true || value.complete === true) return true;
-  for (const key of ['status', 'verdict', 'result', 'outcome']) {
-    const candidate = safeString(value[key]).toLowerCase();
-    if (PASSING_VALUES.has(candidate)) return true;
-  }
-  return false;
+  return value.passed === true;
+}
+
+function isInsideDirectory(parent: string, child: string): boolean {
+  const childRelativePath = relative(parent, child);
+  return childRelativePath === '' || (!childRelativePath.startsWith('..') && !isAbsolute(childRelativePath));
 }
 
 function hasSubstantiveValue(value: unknown): boolean {
@@ -36,14 +36,21 @@ function hasSubstantiveValue(value: unknown): boolean {
 function readAuditArtifact(cwd: string, rawPath: unknown): Record<string, unknown> | null {
   const auditPath = safeString(rawPath);
   if (!auditPath) return null;
-  const resolvedPath = isAbsolute(auditPath) ? auditPath : join(cwd, auditPath);
+  if (isAbsolute(auditPath)) return null;
+
+  const root = resolve(cwd);
+  const resolvedPath = resolve(root, auditPath);
+  if (!isInsideDirectory(root, resolvedPath)) return null;
   if (!existsSync(resolvedPath)) return null;
+  if (extname(resolvedPath) !== JSON_EXTENSION) return null;
+
+  const rootRealPath = realpathSync(root);
+  const artifactRealPath = realpathSync(resolvedPath);
+  if (!isInsideDirectory(rootRealPath, artifactRealPath)) return null;
+
   try {
     const content = readFileSync(resolvedPath, 'utf-8').trim();
     if (!content) return null;
-    if (!resolvedPath.endsWith('.json')) {
-      return { passed: true, checklist: content, verification_evidence: content };
-    }
     const parsed = JSON.parse(content) as unknown;
     return isRecord(parsed) ? parsed : null;
   } catch {

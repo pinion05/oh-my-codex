@@ -1,4 +1,4 @@
-# oh-my-codex v0.16.4
+# Release notes — 0.16.4
 
 `0.16.4` is a post-`0.16.3` reliability release for approved execution handoffs, context-pack metadata, Codex hook feature-flag migration, setup/notify ownership, HUD/runtime state-root visibility, Ralph completion audit evidence, and Ultragoal completion proof requirements.
 
@@ -8,6 +8,12 @@
 - **Codex hook setup stays compatible across CLI releases** — setup probes supported Codex feature flags, writes `[features].hooks = true` when available, retains the legacy `codex_hooks` fallback for older CLIs, dedupes stale hook aliases, keeps hooks active after clear resets, and detects stale PostCompact wiring.
 - **Runtime ownership and visibility are safer** — OMX notify dispatch avoids recursive wrapper chains, setup mode switches avoid duplicate hook state, plugin-mode skill discovery and plugin MCP cleanup are hardened, boxed Team state-root precedence is corrected, and HUD visualization stays rooted in runtime authority.
 - **Completion gates are harder to overclaim** — Ralph completion requires audit evidence, and Ultragoal final completion requires cleanup/review proof before accepting done state.
+
+## Fixes and compatibility notes
+
+- Existing older Codex installs remain supported through the legacy `codex_hooks` fallback path, but current generated configuration prefers `[features].hooks = true` when the installed CLI advertises it.
+- Approved execution parsing now handles canonical approved PRD aliases, multiline launch hints, visible hint lineage fallback, and private context-pack metadata without dropping readiness evidence.
+- The release includes skill/doc guidance updates for Ultragoal, UltraQA, Ultrawork, setup, planning, and related runtime workflows so generated/plugin mirrors stay aligned with the runtime behavior.
 
 ## Merged PR inventory
 
@@ -33,9 +39,5 @@
 - Local release-review gates: `npm run build`, `npm run lint`, `npm run check:no-unused`, `node --test dist/cli/__tests__/version-sync-contract.test.js`, release-focused targeted Node suites, `cargo test`, `npm pack --dry-run`, and `git diff --check`.
 - Release body generation is a pending pre-tag gate tracked in `docs/qa/release-readiness-0.16.4.md`; run `generate-release-body.js` against the local annotated `v0.16.4` tag before pushing the tag.
 - GitHub CI and publication evidence are tracked in `docs/qa/release-readiness-0.16.4.md`; pending gates must be filled after CI, tag workflow, GitHub release, and npm verification complete.
-
-## Contributors
-
-Thanks to @Yeachan-Heo, @lkraider, and @weathour for the PRs and fixes that made up the `0.16.4` train, plus the release-review work that hardened the final tag.
 
 **Full Changelog**: [`v0.16.3...v0.16.4`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.16.3...v0.16.4)

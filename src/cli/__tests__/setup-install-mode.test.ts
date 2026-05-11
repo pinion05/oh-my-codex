@@ -247,7 +247,7 @@ describe("notify setup scope", () => {
 				const config = await readFile(join(codexHomeDir, "config.toml"), "utf-8");
 				assert.match(config, /^notify = \["node", ".*notify-hook\.js"\]$/m);
 				assert.doesNotMatch(config, /notify-dispatcher\.js/);
-				assert.doesNotMatch(config, /opt\/homebrew/);
+				assert.doesNotMatch(config, /lib\/node_modules\/oh-my-codex\/dist\/scripts\/notify-hook\.js/);
 			});
 		} finally {
 			await rm(wd, { recursive: true, force: true });

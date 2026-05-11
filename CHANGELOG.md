@@ -4,9 +4,34 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.16.4] - 2026-05-11
+
+Patch release focused on post-`0.16.3` workflow reliability: approved execution handoff integrity, context-pack metadata visibility, Codex hook feature-flag migration, setup/notify ownership safety, HUD/runtime state-root visibility, Ralph completion audit evidence, and Ultragoal completion proof requirements.
+
+### Added
+
+- **Approved context references** — Ralph, Team, and planning handoffs can carry approved context-pack references, private entry metadata, canonical PRD aliases, and ready role refs through the execution lifecycle.
+- **Ralph completion audit guardrails** — Ralph completion now records and checks audit evidence before accepting done-state claims.
+
+### Changed
+
+- **Ultragoal completion proof is stricter** — final cleanup/review proof is required before Ultragoal completion, and docs/skills now make that stop condition explicit.
+- **Skill catalog hygiene** — obsolete catalog entries were pruned and skill guidance was tightened around active OMX runtime surfaces.
+
 ### Fixed
 
-- **Codex hook feature flag compatibility** — setup now probes `codex features list` and writes the current `[features].hooks = true` flag when supported, while retaining legacy `[features].codex_hooks = true` fallback for older Codex releases and deduping stale aliases during refresh.
+- **Codex hook feature flag compatibility** — setup probes `codex features list` and writes the current `[features].hooks = true` flag when supported, while retaining legacy `[features].codex_hooks = true` fallback for older Codex releases and deduping stale aliases during refresh.
+- **Setup, notify, and hook-state ownership** — setup mode switches avoid duplicate hook state, hooks stay active after clear resets, stale PostCompact wiring is detected, and OMX notify dispatch no longer recursively wraps itself.
+- **Approved execution and planning durability** — approved handoffs survive Team scale-up, multiline launch hints, visible hint lineage fallbacks, and context-pack diagnostics/markdown parsing edge cases.
+- **Runtime visibility and cleanup** — HUD visualization stays rooted in OMX runtime authority, plugin-mode skill discovery and plugin MCP cleanup are safer, and boxed Team state-root precedence is corrected.
+
+### PRs
+
+- #2222, #2223, #2224, #2226, #2229, #2241, #2242, #2243, #2245, #2248, #2251, #2256, #2259, #2262, #2263
+
+### Verification
+
+- Release readiness evidence is tracked in `docs/qa/release-readiness-0.16.4.md`.
 
 ## [0.16.3] - 2026-05-09
 
