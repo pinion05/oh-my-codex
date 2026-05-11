@@ -1811,7 +1811,7 @@ describe("project launch scope helpers", () => {
         join(projectCodexHome, "config.toml"),
         [
           "[features]",
-          "codex_hooks = true",
+          "hooks = true",
           "",
           "# OMX-owned Codex hook trust state",
           "# Trusts only setup-managed codex-native-hook.js wrappers.",
