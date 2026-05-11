@@ -1,6 +1,6 @@
 import { createHash } from "crypto";
 import { readdir, realpath } from "fs/promises";
-import { basename, join, relative, resolve, win32 } from "path";
+import { basename, dirname, join, relative, resolve, win32 } from "path";
 
 export const MANAGED_HOOK_EVENTS = [
   "SessionStart",
@@ -91,16 +91,105 @@ function quoteWindowsCommandPart(value: string): string {
   return `"${value.replace(/"/g, '\\"')}"`;
 }
 
+function quotePowerShellLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function quoteWindowsProcessArgument(value: string): string {
+  let quoted = '"';
+  let backslashes = 0;
+
+  for (const char of value) {
+    if (char === '\\') {
+      backslashes += 1;
+      continue;
+    }
+
+    if (char === '"') {
+      quoted += '\\'.repeat(backslashes * 2 + 1);
+      quoted += '"';
+      backslashes = 0;
+      continue;
+    }
+
+    quoted += '\\'.repeat(backslashes);
+    quoted += char;
+    backslashes = 0;
+  }
+
+  quoted += '\\'.repeat(backslashes * 2);
+  quoted += '"';
+  return quoted;
+}
+
+export const WINDOWS_NATIVE_HOOK_SHIM_RELATIVE_PATH = [
+  "hooks",
+  "omx-native-hook-windows-shim.ps1",
+] as const;
+
+export interface ManagedCodexHookOptions {
+  platform?: HookCommandPlatform;
+  codexHomeDir?: string;
+  nodePath?: string;
+  hookScriptPath?: string;
+}
+
+export function buildManagedCodexNativeHookWindowsShimPath(
+  codexHomeDir: string,
+): string {
+  return win32.join(codexHomeDir, ...WINDOWS_NATIVE_HOOK_SHIM_RELATIVE_PATH);
+}
+
+export function buildManagedCodexNativeHookWindowsShimContent(
+  pkgRoot: string,
+  options: Pick<ManagedCodexHookOptions, "hookScriptPath" | "nodePath"> = {},
+): string {
+  const hookScript =
+    options.hookScriptPath ??
+    win32.join(pkgRoot, "dist", "scripts", "codex-native-hook.js");
+  const nodePath = options.nodePath ?? process.execPath;
+
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    "$stdinPayload = [Console]::In.ReadToEnd()",
+    "$startInfo = [System.Diagnostics.ProcessStartInfo]::new()",
+    `$startInfo.FileName = ${quotePowerShellLiteral(nodePath)}`,
+    "$startInfo.UseShellExecute = $false",
+    "$startInfo.RedirectStandardInput = $true",
+    "$startInfo.RedirectStandardOutput = $true",
+    "$startInfo.RedirectStandardError = $true",
+    `$startInfo.Arguments = ${quotePowerShellLiteral(quoteWindowsProcessArgument(hookScript))}`,
+    "$process = [System.Diagnostics.Process]::new()",
+    "$process.StartInfo = $startInfo",
+    "$null = $process.Start()",
+    "$stdoutTask = $process.StandardOutput.ReadToEndAsync()",
+    "$stderrTask = $process.StandardError.ReadToEndAsync()",
+    "$process.StandardInput.Write($stdinPayload)",
+    "$process.StandardInput.Close()",
+    "$process.WaitForExit()",
+    "[Console]::Out.Write($stdoutTask.Result)",
+    "[Console]::Error.Write($stderrTask.Result)",
+    "exit $process.ExitCode",
+    "",
+  ].join("\n");
+}
+
 export function buildManagedCodexNativeHookCommand(
   pkgRoot: string,
-  platform: HookCommandPlatform = process.platform,
+  optionsOrPlatform: HookCommandPlatform | ManagedCodexHookOptions = process.platform,
 ): string {
+  const options = typeof optionsOrPlatform === "string"
+    ? { platform: optionsOrPlatform }
+    : optionsOrPlatform;
+  const platform = options.platform ?? process.platform;
   const hookScript = platform === "win32"
     ? win32.join(pkgRoot, "dist", "scripts", "codex-native-hook.js")
     : join(pkgRoot, "dist", "scripts", "codex-native-hook.js");
 
   if (platform === "win32") {
-    return `node ${quoteWindowsCommandPart(hookScript)}`;
+    const codexHomeDir = options.codexHomeDir ?? dirname(pkgRoot);
+    const shimPath = buildManagedCodexNativeHookWindowsShimPath(codexHomeDir);
+    return `powershell.exe -NoProfile -ExecutionPolicy Bypass -File ${quoteWindowsCommandPart(shimPath)}`;
   }
 
   return `${quoteCommandPart(process.execPath)} ${quoteCommandPart(hookScript)}`;
@@ -129,9 +218,9 @@ function buildCommandHook(
 
 export function buildManagedCodexHooksConfig(
   pkgRoot: string,
-  options: { platform?: HookCommandPlatform } = {},
+  options: ManagedCodexHookOptions = {},
 ): ManagedCodexHooksConfig {
-  const command = buildManagedCodexNativeHookCommand(pkgRoot, options.platform);
+  const command = buildManagedCodexNativeHookCommand(pkgRoot, options);
 
   return {
     hooks: {
@@ -183,7 +272,8 @@ export function parseCodexHooksConfig(
 }
 
 function isOmxManagedHookCommand(command: string): boolean {
-  return /(?:^|[\\/])codex-native-hook\.js(?:["'\s]|$)/.test(command);
+  return /(?:^|[\\/])codex-native-hook\.js(?:["'\s]|$)/.test(command)
+    || /(?:^|[\\/])omx-native-hook-windows-shim\.ps1(?:["'\s]|$)/i.test(command);
 }
 
 function countManagedHooksInEntry(entry: unknown): number {
@@ -333,9 +423,14 @@ function managedHookStateKey(
 export function buildManagedCodexHookTrustState(
   hooksPath: string,
   pkgRoot: string,
-  options: { platform?: HookCommandPlatform } = {},
+  options: ManagedCodexHookOptions = {},
 ): Record<string, ManagedCodexHookTrustState> {
-  const managedConfig = buildManagedCodexHooksConfig(pkgRoot, options);
+  const managedConfig = buildManagedCodexHooksConfig(pkgRoot, {
+    ...options,
+    ...(options.platform === "win32" && !options.codexHomeDir
+      ? { codexHomeDir: dirname(hooksPath) }
+      : {}),
+  });
   const state: Record<string, ManagedCodexHookTrustState> = {};
 
   for (const eventName of MANAGED_HOOK_EVENTS) {
@@ -366,7 +461,7 @@ export function buildManagedCodexHookTrustState(
 export function buildManagedCodexHookTrustToml(
   hooksPath: string | undefined,
   pkgRoot: string,
-  options: { platform?: HookCommandPlatform } = {},
+  options: ManagedCodexHookOptions = {},
 ): string {
   if (!hooksPath) return "";
   const state = buildManagedCodexHookTrustState(hooksPath, pkgRoot, options);
@@ -499,13 +594,19 @@ export async function discoverCodexHookConfigPaths(
 export function mergeManagedCodexHooksConfig(
   existingContent: string | null | undefined,
   pkgRoot: string,
-  hooksPathOrOptions?: string | { platform?: HookCommandPlatform },
-  options: { platform?: HookCommandPlatform } = {},
+  hooksPathOrOptions?: string | ManagedCodexHookOptions,
+  options: ManagedCodexHookOptions = {},
 ): string {
   const hooksPath = typeof hooksPathOrOptions === "string" ? hooksPathOrOptions : undefined;
-  const resolvedOptions = typeof hooksPathOrOptions === "object" && hooksPathOrOptions !== null
+  const providedOptions = typeof hooksPathOrOptions === "object" && hooksPathOrOptions !== null
     ? hooksPathOrOptions
     : options;
+  const resolvedOptions = {
+    ...providedOptions,
+    ...(hooksPath && providedOptions.platform === "win32" && !providedOptions.codexHomeDir
+      ? { codexHomeDir: dirname(hooksPath) }
+      : {}),
+  };
   const managedConfig = buildManagedCodexHooksConfig(pkgRoot, resolvedOptions);
   const parsed =
     typeof existingContent === "string"
