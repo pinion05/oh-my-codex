@@ -27,6 +27,30 @@ describe('modes/base session-scoped persistence', () => {
     }
   });
 
+  it('writes session canonical skill state under the base state dir without nesting sessions twice', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-mode-session-canonical-'));
+    try {
+      const stateDir = join(wd, '.omx', 'state');
+      const sessionId = 'sess-base-canonical';
+      const sessionDir = join(stateDir, 'sessions', sessionId);
+      await mkdir(sessionDir, { recursive: true });
+      await writeFile(join(stateDir, 'session.json'), JSON.stringify({ session_id: sessionId }));
+
+      await startMode('ralplan', 'write canonical in session scope', 5, wd);
+      await updateModeState('ralplan', { current_phase: 'planning', iteration: 1 }, wd);
+
+      const canonicalPath = join(sessionDir, 'skill-active-state.json');
+      const nestedCanonicalPath = join(sessionDir, 'sessions', sessionId, 'skill-active-state.json');
+      assert.equal(existsSync(canonicalPath), true);
+      assert.equal(existsSync(nestedCanonicalPath), false);
+      const canonical = JSON.parse(await readFile(canonicalPath, 'utf-8')) as Record<string, unknown>;
+      assert.equal(canonical.skill, 'ralplan');
+      assert.equal(canonical.phase, 'planning');
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
   it('persists owner_omx_session_id for Ralph when session scope is active', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-mode-session-ralph-owner-'));
     try {

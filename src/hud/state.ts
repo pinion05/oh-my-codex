@@ -9,14 +9,13 @@ import { readFileSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { join, dirname, basename } from 'path';
 import { fileURLToPath } from 'url';
-import { omxStateDir } from '../utils/paths.js';
 import { findGitLayout, readGitLayoutFile } from '../utils/git-layout.js';
 import { getDefaultBridge, isBridgeEnabled } from '../runtime/bridge.js';
 import type { RuntimeSnapshot } from '../runtime/bridge.js';
-import { getReadScopedStateFilePaths, getReadScopedStatePaths, readCurrentSessionId } from '../mcp/state-paths.js';
+import { getBaseStateDir, getReadScopedStateFilePaths, getReadScopedStatePaths, readCurrentSessionId } from '../mcp/state-paths.js';
 import { teamReadPhase as readTeamPhase } from '../team/team-ops.js';
 import { readUsableSessionState } from '../hooks/session.js';
-import { listActiveSkills, readVisibleSkillActiveState } from '../state/skill-active.js';
+import { listActiveSkills, readVisibleSkillActiveStateForStateDir } from '../state/skill-active.js';
 import type {
   RalphStateForHud,
   UltraworkStateForHud,
@@ -409,7 +408,8 @@ export async function readAllState(cwd: string, config: ResolvedHudConfig = DEFA
     readSessionState(cwd),
     readCurrentSessionId(cwd),
   ]);
-  const canonicalSkillState = await readVisibleSkillActiveState(cwd, currentSessionId);
+  const stateDir = getBaseStateDir(cwd);
+  const canonicalSkillState = await readVisibleSkillActiveStateForStateDir(stateDir, currentSessionId);
   const canonicalSkills = new Map(
     listActiveSkills(canonicalSkillState).map((entry) => [entry.skill, entry] as const),
   );
@@ -481,7 +481,6 @@ export async function readAllState(cwd: string, config: ResolvedHudConfig = DEFA
   // for authority/backlog/readiness display over JS-inferred state.
   let runtimeSnapshot: RuntimeSnapshot | null = null;
   if (isBridgeEnabled()) {
-    const stateDir = omxStateDir(cwd);
     const bridge = getDefaultBridge(stateDir);
     runtimeSnapshot = bridge.readCompatFile<RuntimeSnapshot>('snapshot.json');
   }

@@ -380,6 +380,112 @@ describe('keyword registry coverage', () => {
 });
 
 describe('keyword detector skill-active-state lifecycle', () => {
+  it('co-locates direct boxed activation mode detail and canonical skill state for OMX_ROOT', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'omx-keyword-boxed-root-'));
+    const sourceCwd = join(root, 'source');
+    const omxRoot = join(root, 'box');
+    const stateDir = join(omxRoot, '.omx', 'state');
+    const previousOmxRoot = process.env.OMX_ROOT;
+    const previousOmxStateRoot = process.env.OMX_STATE_ROOT;
+    const previousTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+    try {
+      await mkdir(sourceCwd, { recursive: true });
+      process.env.OMX_ROOT = omxRoot;
+      delete process.env.OMX_STATE_ROOT;
+      delete process.env.OMX_TEAM_STATE_ROOT;
+
+      const result = await recordSkillActivation({
+        stateDir,
+        sourceCwd,
+        text: '$ralplan implement issue #1307',
+        sessionId: 'sess-boxed-ralplan',
+        threadId: 'thread-boxed',
+        turnId: 'turn-boxed',
+        nowIso: '2026-05-10T00:00:00.000Z',
+      });
+
+      assert.ok(result);
+      assert.equal(result.skill, 'ralplan');
+      assert.equal(
+        existsSync(join(stateDir, 'sessions', 'sess-boxed-ralplan', SKILL_ACTIVE_STATE_FILE)),
+        true,
+      );
+      assert.equal(
+        existsSync(join(stateDir, 'sessions', 'sess-boxed-ralplan', 'ralplan-state.json')),
+        true,
+      );
+      assert.equal(
+        existsSync(join(sourceCwd, '.omx', 'state', 'sessions', 'sess-boxed-ralplan', SKILL_ACTIVE_STATE_FILE)),
+        false,
+      );
+      assert.equal(
+        existsSync(join(sourceCwd, '.omx', 'state', 'sessions', 'sess-boxed-ralplan', 'ralplan-state.json')),
+        false,
+      );
+    } finally {
+      if (typeof previousOmxRoot === 'string') process.env.OMX_ROOT = previousOmxRoot;
+      else delete process.env.OMX_ROOT;
+      if (typeof previousOmxStateRoot === 'string') process.env.OMX_STATE_ROOT = previousOmxStateRoot;
+      else delete process.env.OMX_STATE_ROOT;
+      if (typeof previousTeamStateRoot === 'string') process.env.OMX_TEAM_STATE_ROOT = previousTeamStateRoot;
+      else delete process.env.OMX_TEAM_STATE_ROOT;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('co-locates direct boxed activation mode detail and canonical skill state for OMX_STATE_ROOT', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'omx-keyword-boxed-state-root-'));
+    const sourceCwd = join(root, 'source');
+    const stateRoot = join(root, 'state-root');
+    const stateDir = join(stateRoot, '.omx', 'state');
+    const previousOmxRoot = process.env.OMX_ROOT;
+    const previousOmxStateRoot = process.env.OMX_STATE_ROOT;
+    const previousTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+    try {
+      await mkdir(sourceCwd, { recursive: true });
+      delete process.env.OMX_ROOT;
+      process.env.OMX_STATE_ROOT = stateRoot;
+      delete process.env.OMX_TEAM_STATE_ROOT;
+
+      const result = await recordSkillActivation({
+        stateDir,
+        sourceCwd,
+        text: '$ralplan implement issue #1307',
+        sessionId: 'sess-state-root-ralplan',
+        threadId: 'thread-state-root',
+        turnId: 'turn-state-root',
+        nowIso: '2026-05-10T00:00:00.000Z',
+      });
+
+      assert.ok(result);
+      assert.equal(result.skill, 'ralplan');
+      assert.equal(
+        existsSync(join(stateDir, 'sessions', 'sess-state-root-ralplan', SKILL_ACTIVE_STATE_FILE)),
+        true,
+      );
+      assert.equal(
+        existsSync(join(stateDir, 'sessions', 'sess-state-root-ralplan', 'ralplan-state.json')),
+        true,
+      );
+      assert.equal(
+        existsSync(join(sourceCwd, '.omx', 'state', 'sessions', 'sess-state-root-ralplan', SKILL_ACTIVE_STATE_FILE)),
+        false,
+      );
+      assert.equal(
+        existsSync(join(sourceCwd, '.omx', 'state', 'sessions', 'sess-state-root-ralplan', 'ralplan-state.json')),
+        false,
+      );
+    } finally {
+      if (typeof previousOmxRoot === 'string') process.env.OMX_ROOT = previousOmxRoot;
+      else delete process.env.OMX_ROOT;
+      if (typeof previousOmxStateRoot === 'string') process.env.OMX_STATE_ROOT = previousOmxStateRoot;
+      else delete process.env.OMX_STATE_ROOT;
+      if (typeof previousTeamStateRoot === 'string') process.env.OMX_TEAM_STATE_ROOT = previousTeamStateRoot;
+      else delete process.env.OMX_TEAM_STATE_ROOT;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('writes skill-active-state.json with ralplan phase when autopilot keyword activates', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-keyword-state-'));
     const stateDir = join(cwd, '.omx', 'state');

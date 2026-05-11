@@ -56,6 +56,7 @@ export interface SkillActiveStateLike {
 
 export interface SyncCanonicalSkillStateOptions {
   cwd: string;
+  baseStateDir?: string;
   mode: string;
   active: boolean;
   currentPhase?: string;
@@ -224,12 +225,19 @@ export function getSkillActiveStatePaths(cwd: string, sessionId?: string): {
   rootPath: string;
   sessionPath?: string;
 } {
-  const rootPath = join(omxStateDir(cwd), SKILL_ACTIVE_STATE_FILE);
+  return getSkillActiveStatePathsForStateDir(omxStateDir(cwd), sessionId);
+}
+
+export function getSkillActiveStatePathsForStateDir(stateDir: string, sessionId?: string): {
+  rootPath: string;
+  sessionPath?: string;
+} {
+  const rootPath = join(stateDir, SKILL_ACTIVE_STATE_FILE);
   const normalizedSession = safeString(sessionId).trim();
   if (!normalizedSession) return { rootPath };
   return {
     rootPath,
-    sessionPath: join(omxStateDir(cwd), 'sessions', normalizedSession, SKILL_ACTIVE_STATE_FILE),
+    sessionPath: join(stateDir, 'sessions', normalizedSession, SKILL_ACTIVE_STATE_FILE),
   };
 }
 
@@ -248,6 +256,25 @@ export async function writeSkillActiveStateCopies(
   rootState?: SkillActiveStateLike | null,
 ): Promise<void> {
   const { rootPath, sessionPath } = getSkillActiveStatePaths(cwd, sessionId);
+  await writeSkillActiveStateCopiesToPaths(rootPath, sessionPath, state, rootState);
+}
+
+export async function writeSkillActiveStateCopiesForStateDir(
+  stateDir: string,
+  state: SkillActiveStateLike,
+  sessionId?: string,
+  rootState?: SkillActiveStateLike | null,
+): Promise<void> {
+  const { rootPath, sessionPath } = getSkillActiveStatePathsForStateDir(stateDir, sessionId);
+  await writeSkillActiveStateCopiesToPaths(rootPath, sessionPath, state, rootState);
+}
+
+async function writeSkillActiveStateCopiesToPaths(
+  rootPath: string,
+  sessionPath: string | undefined,
+  state: SkillActiveStateLike,
+  rootState?: SkillActiveStateLike | null,
+): Promise<void> {
   const normalized = { version: 1, ...state };
   const normalizedRoot = rootState === null
     ? null
@@ -267,6 +294,21 @@ export async function writeSkillActiveStateCopies(
 
 export async function readVisibleSkillActiveState(cwd: string, sessionId?: string): Promise<SkillActiveStateLike | null> {
   const { rootPath, sessionPath } = getSkillActiveStatePaths(cwd, sessionId);
+  return readVisibleSkillActiveStateFromPaths(rootPath, sessionPath);
+}
+
+export async function readVisibleSkillActiveStateForStateDir(
+  stateDir: string,
+  sessionId?: string,
+): Promise<SkillActiveStateLike | null> {
+  const { rootPath, sessionPath } = getSkillActiveStatePathsForStateDir(stateDir, sessionId);
+  return readVisibleSkillActiveStateFromPaths(rootPath, sessionPath);
+}
+
+async function readVisibleSkillActiveStateFromPaths(
+  rootPath: string,
+  sessionPath?: string,
+): Promise<SkillActiveStateLike | null> {
   if (sessionPath && existsSync(sessionPath)) {
     return readSkillActiveState(sessionPath);
   }
@@ -282,6 +324,7 @@ export function tracksCanonicalWorkflowSkill(mode: string): mode is CanonicalWor
 export async function syncCanonicalSkillStateForMode(options: SyncCanonicalSkillStateOptions): Promise<void> {
   const {
     cwd,
+    baseStateDir = omxStateDir(cwd),
     mode,
     active,
     currentPhase,
@@ -295,7 +338,7 @@ export async function syncCanonicalSkillStateForMode(options: SyncCanonicalSkill
 
   if (!tracksCanonicalWorkflowSkill(mode)) return;
 
-  const { rootPath, sessionPath } = getSkillActiveStatePaths(cwd, sessionId);
+  const { rootPath, sessionPath } = getSkillActiveStatePathsForStateDir(baseStateDir, sessionId);
   const existingRoot = await readSkillActiveState(rootPath);
   const existingSession = sessionPath ? await readSkillActiveState(sessionPath) : null;
   if (!existingRoot && !existingSession && !active && !options.allSessions) return;
@@ -390,7 +433,7 @@ export async function syncCanonicalSkillStateForMode(options: SyncCanonicalSkill
         mode,
         normalizedSessionId,
       );
-    await writeSkillActiveStateCopies(cwd, nextSessionState, sessionId, nextRootState);
+    await writeSkillActiveStateCopiesForStateDir(baseStateDir, nextSessionState, sessionId, nextRootState);
     return;
   }
 
@@ -416,9 +459,9 @@ export async function syncCanonicalSkillStateForMode(options: SyncCanonicalSkill
     : [...sessionScopedRootMirrorEntries, ...nextRootScopedEntries];
 
   const nextRootState = applyEntriesToState(existingRoot, nextRootEntries, mode);
-  await writeSkillActiveStateCopies(cwd, nextRootState, undefined, nextRootState);
+  await writeSkillActiveStateCopiesForStateDir(baseStateDir, nextRootState, undefined, nextRootState);
 
-  const sessionsDir = join(omxStateDir(cwd), 'sessions');
+  const sessionsDir = join(baseStateDir, 'sessions');
   if (!existsSync(sessionsDir)) return;
 
   const sessionIds = await readdir(sessionsDir).catch(() => []);
@@ -447,6 +490,6 @@ export async function syncCanonicalSkillStateForMode(options: SyncCanonicalSkill
       nextSessionEntries[0]?.skill || mode,
       sessionId,
     );
-    await writeSkillActiveStateCopies(cwd, nextSessionState, sessionId, nextRootState);
+    await writeSkillActiveStateCopiesForStateDir(baseStateDir, nextSessionState, sessionId, nextRootState);
   }
 }

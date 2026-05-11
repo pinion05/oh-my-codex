@@ -157,4 +157,61 @@ describe('workflow transition rules', () => {
       await rm(wd, { recursive: true, force: true });
     }
   });
+
+  it('co-locates auto-completed mode detail and canonical skill state under an explicit base state dir', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'omx-workflow-reconcile-base-dir-'));
+    try {
+      const wd = join(root, 'source');
+      const baseStateDir = join(root, 'boxed-state');
+      const sessionId = 'sess-transition-base-dir';
+      const sessionDir = join(baseStateDir, 'sessions', sessionId);
+      await mkdir(sessionDir, { recursive: true });
+      await writeFile(
+        join(sessionDir, 'deep-interview-state.json'),
+        JSON.stringify({ active: true, mode: 'deep-interview', current_phase: 'interviewing' }, null, 2),
+        'utf-8',
+      );
+      await writeFile(
+        join(sessionDir, 'skill-active-state.json'),
+        JSON.stringify({
+          version: 1,
+          active: true,
+          skill: 'deep-interview',
+          phase: 'interviewing',
+          active_skills: [
+            {
+              skill: 'deep-interview',
+              phase: 'interviewing',
+              active: true,
+              session_id: sessionId,
+            },
+          ],
+        }, null, 2),
+        'utf-8',
+      );
+
+      const transition = await reconcileWorkflowTransition(wd, 'ralplan', {
+        action: 'start',
+        sessionId,
+        source: 'test',
+        baseStateDir,
+      });
+
+      const boxedModePath = join(sessionDir, 'deep-interview-state.json');
+      assert.equal(transition.decision.allowed, true);
+      assert.deepEqual(transition.completedPaths, [boxedModePath]);
+
+      const boxedMode = JSON.parse(await readFile(boxedModePath, 'utf-8')) as Record<string, unknown>;
+      assert.equal(boxedMode.active, false);
+      assert.equal(boxedMode.current_phase, 'completed');
+
+      const boxedSkill = JSON.parse(await readFile(join(sessionDir, 'skill-active-state.json'), 'utf-8')) as Record<string, unknown>;
+      assert.equal(boxedSkill.active, false);
+
+      assert.equal(existsSync(join(wd, '.omx', 'state', 'sessions', sessionId, 'deep-interview-state.json')), false);
+      assert.equal(existsSync(join(wd, '.omx', 'state', 'sessions', sessionId, 'skill-active-state.json')), false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

@@ -120,12 +120,14 @@ export async function startMode(
   await mkdir(dir, { recursive: true });
 
   const scope = await resolveStateScope(projectRoot);
+  const baseStateDir = getBaseStateDir(projectRoot);
   let transitionMessage: string | undefined;
   if (isTrackedWorkflowMode(mode)) {
     const transition = await reconcileWorkflowTransition(projectRoot ?? process.cwd(), mode, {
       action: 'start',
       sessionId: scope.sessionId,
       source: 'startMode',
+      baseStateDir,
     });
     transitionMessage = transition.transitionMessage;
   }
@@ -150,6 +152,7 @@ export async function startMode(
   if (isTrackedWorkflowMode(mode)) {
     await syncCanonicalSkillStateForMode({
       cwd: projectRoot ?? process.cwd(),
+      baseStateDir,
       mode,
       active: true,
       currentPhase: typeof state.current_phase === 'string' ? state.current_phase : undefined,
@@ -235,6 +238,7 @@ export async function updateModeState(
   explicitSessionId?: string,
 ): Promise<ModeState> {
   const scope = await resolveStateScope(projectRoot, explicitSessionId);
+  const baseStateDir = getBaseStateDir(projectRoot);
   const current = mode === 'ralph' && scope.sessionId
     ? await readModeStateForActiveDecision(mode, scope.sessionId, projectRoot)
     : explicitSessionId
@@ -261,6 +265,7 @@ export async function updateModeState(
   if (isTrackedWorkflowMode(mode)) {
     await syncCanonicalSkillStateForMode({
       cwd: projectRoot ?? process.cwd(),
+      baseStateDir,
       mode,
       active: updated.active === true,
       currentPhase: typeof updated.current_phase === 'string' ? updated.current_phase : undefined,
