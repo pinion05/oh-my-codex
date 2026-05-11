@@ -47,7 +47,7 @@ Release: https://github.com/Yeachan-Heo/oh-my-codex/releases/tag/v0.16.4
 | Package dry run | PASS — `npm pack --dry-run`. |
 | Release body generation | PENDING — run `generate-release-body.js` against the local annotated `v0.16.4` tag before pushing the tag, then record the generated output path/checksum. |
 | Diff hygiene | PASS — `git diff --check`. |
-| Dev CI | PENDING — verify after pushing the release-prep commit. |
+| Dev CI | PASS — GitHub Actions CI run `25647673921` on `dev` commit `ae09fd9e` completed successfully on 2026-05-11. |
 | Main CI | PENDING — verify after promotion. |
 | Release workflow | PENDING — verify after pushing tag `v0.16.4`. |
 | GitHub release | PENDING — verify non-draft/non-prerelease release and native assets. |
