@@ -33,4 +33,27 @@ describe('ultragoal docs contract', () => {
     assert.match(doc, /Active or incomplete wrong Codex goals remain strict mismatch errors/i);
     assert.match(doc, /must not be used to bypass active-goal mismatch protection/i);
   });
+
+  it('documents the mandatory final cleanup and review gate', () => {
+    const docs = [
+      loadDoc('docs/ultragoal.md'),
+      loadDoc('skills/ultragoal/SKILL.md'),
+      loadDoc('plugins/oh-my-codex/skills/ultragoal/SKILL.md'),
+    ];
+
+    for (const doc of docs) {
+      assert.match(doc, /Mandatory final cleanup and review gate/);
+      assert.match(doc, /ai-slop-cleaner/);
+      assert.match(doc, /passed\/no-op report/);
+      assert.match(doc, /post-cleaner verification/i);
+      assert.match(doc, /\$code-review/);
+      assert.match(doc, /record-review-blockers/);
+      assert.match(doc, /review_blocked/);
+      assert.match(doc, /quality-gate-json/);
+      assert.match(doc, /APPROVE/);
+      assert.match(doc, /CLEAR/);
+      assert.doesNotMatch(doc, /not_applicable/);
+      assert.doesNotMatch(doc, /On the final story only, call `update_goal/);
+    }
+  });
 });

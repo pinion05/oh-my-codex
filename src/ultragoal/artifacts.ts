@@ -12,7 +12,7 @@ export const ULTRAGOAL_BRIEF = 'brief.md';
 export const ULTRAGOAL_GOALS = 'goals.json';
 export const ULTRAGOAL_LEDGER = 'ledger.jsonl';
 
-export type UltragoalStatus = 'pending' | 'in_progress' | 'complete' | 'failed';
+export type UltragoalStatus = 'pending' | 'in_progress' | 'complete' | 'failed' | 'review_blocked';
 export type UltragoalCodexGoalMode = 'aggregate' | 'per_story';
 
 export interface UltragoalItem {
@@ -27,6 +27,7 @@ export interface UltragoalItem {
   startedAt?: string;
   completedAt?: string;
   failedAt?: string;
+  reviewBlockedAt?: string;
   evidence?: string;
   failureReason?: string;
 }
@@ -53,12 +54,16 @@ export interface UltragoalLedgerEntry {
     | 'goal_completed'
     | 'goal_blocked'
     | 'goal_failed'
-    | 'goal_retried';
+    | 'goal_retried'
+    | 'goal_added'
+    | 'final_review_failed'
+    | 'goal_review_blocked';
   goalId?: string;
   status?: UltragoalStatus;
   message?: string;
   codexGoal?: unknown;
   evidence?: string;
+  qualityGate?: UltragoalQualityGate;
 }
 
 export interface CreateUltragoalOptions {
@@ -79,7 +84,38 @@ export interface CheckpointOptions {
   status: Extract<UltragoalStatus, 'complete' | 'failed'> | 'blocked';
   evidence?: string;
   codexGoal?: unknown;
+  qualityGate?: unknown;
+  allowActiveFinalCodexGoal?: boolean;
   now?: Date;
+}
+
+export interface AddUltragoalGoalOptions {
+  title: string;
+  objective: string;
+  evidence?: string;
+  now?: Date;
+}
+
+export interface RecordFinalReviewBlockersOptions extends AddUltragoalGoalOptions {
+  goalId: string;
+  codexGoal?: unknown;
+}
+
+export interface UltragoalQualityGate {
+  aiSlopCleaner: {
+    status: 'passed';
+    evidence: string;
+  };
+  verification: {
+    status: 'passed';
+    commands: string[];
+    evidence: string;
+  };
+  codeReview: {
+    recommendation: 'APPROVE';
+    architectStatus: 'CLEAR';
+    evidence: string;
+  };
 }
 
 export class UltragoalError extends Error {}
@@ -120,6 +156,10 @@ function codexGoalMode(plan: UltragoalPlan): UltragoalCodexGoalMode {
   return plan.codexGoalMode ?? 'per_story';
 }
 
+function isResolvedStatus(status: UltragoalStatus): boolean {
+  return status === 'complete' || status === 'review_blocked';
+}
+
 function aggregateCodexObjective(goals: readonly UltragoalItem[]): string {
   const prefix = `Complete all ultragoal stories in ${ULTRAGOAL_DIR}/${ULTRAGOAL_GOALS}: `;
   const suffix = goals.map((goal) => `${goal.id} ${goal.title}`).join('; ');
@@ -136,8 +176,16 @@ function expectedCodexObjective(plan: UltragoalPlan, goal: UltragoalItem): strin
     : goal.objective;
 }
 
-function isFinalAggregateCheckpoint(plan: UltragoalPlan, goal: UltragoalItem): boolean {
-  return plan.goals.every((candidate) => candidate.id === goal.id || candidate.status === 'complete');
+export function isFinalRunCompletionCandidate(plan: UltragoalPlan, goal: UltragoalItem): boolean {
+  return plan.goals.every((candidate) => candidate.id === goal.id || isResolvedStatus(candidate.status));
+}
+
+export function isUltragoalDone(plan: UltragoalPlan): boolean {
+  if (plan.goals.length === 0) return true;
+  if (plan.goals.some((goal) => goal.status === 'pending' || goal.status === 'in_progress' || goal.status === 'failed')) return false;
+  if (!plan.goals.every((goal) => isResolvedStatus(goal.status))) return false;
+  const latestNonReviewBlocked = [...plan.goals].reverse().find((goal) => goal.status !== 'review_blocked');
+  return latestNonReviewBlocked?.status === 'complete';
 }
 
 function titleFromObjective(objective: string, fallback: string): string {
@@ -246,15 +294,86 @@ export async function createUltragoalPlan(cwd: string, options: CreateUltragoalO
   return plan;
 }
 
-export function summarizeUltragoalPlan(plan: UltragoalPlan): { total: number; pending: number; inProgress: number; complete: number; failed: number; activeGoalId?: string } {
+export function summarizeUltragoalPlan(plan: UltragoalPlan): { total: number; pending: number; inProgress: number; complete: number; failed: number; reviewBlocked: number; activeGoalId?: string } {
   return {
     total: plan.goals.length,
     pending: plan.goals.filter((goal) => goal.status === 'pending').length,
     inProgress: plan.goals.filter((goal) => goal.status === 'in_progress').length,
     complete: plan.goals.filter((goal) => goal.status === 'complete').length,
     failed: plan.goals.filter((goal) => goal.status === 'failed').length,
+    reviewBlocked: plan.goals.filter((goal) => goal.status === 'review_blocked').length,
     activeGoalId: plan.activeGoalId,
   };
+}
+
+function assertNonEmpty(value: string | undefined, label: string): string {
+  const trimmed = value?.trim();
+  if (!trimmed) throw new UltragoalError(`Missing ${label}.`);
+  return trimmed;
+}
+
+function appendGoalToPlan(plan: UltragoalPlan, options: AddUltragoalGoalOptions, now: string): UltragoalItem {
+  const title = assertNonEmpty(options.title, '--title');
+  const objective = assertNonEmpty(options.objective, '--objective');
+  const goal: UltragoalItem = {
+    id: normalizeGoalId(title, plan.goals.length),
+    title,
+    objective,
+    status: 'pending',
+    attempt: 0,
+    createdAt: now,
+    updatedAt: now,
+    evidence: options.evidence,
+  };
+  plan.goals.push(goal);
+  plan.updatedAt = now;
+  return goal;
+}
+
+export async function addUltragoalGoal(cwd: string, options: AddUltragoalGoalOptions): Promise<{ plan: UltragoalPlan; goal: UltragoalItem }> {
+  const plan = await readUltragoalPlan(cwd);
+  const now = iso(options.now);
+  const goal = appendGoalToPlan(plan, options, now);
+  await writePlan(cwd, plan);
+  await appendLedger(cwd, {
+    ts: now,
+    event: 'goal_added',
+    goalId: goal.id,
+    status: goal.status,
+    evidence: options.evidence,
+    message: goal.title,
+  });
+  return { plan, goal };
+}
+
+function validateQualityGate(value: unknown): UltragoalQualityGate {
+  if (!value || typeof value !== 'object') {
+    throw new UltragoalError('Final ultragoal completion requires --quality-gate-json with ai-slop-cleaner, verification, and code-review evidence.');
+  }
+  const gate = value as Partial<UltragoalQualityGate>;
+  const cleaner = gate.aiSlopCleaner;
+  const verification = gate.verification;
+  const review = gate.codeReview;
+  if (!cleaner || typeof cleaner !== 'object') throw new UltragoalError('Final quality gate is missing aiSlopCleaner evidence.');
+  if (cleaner.status !== 'passed') {
+    throw new UltragoalError('Final quality gate requires aiSlopCleaner.status="passed"; run ai-slop-cleaner even when it is a no-op.');
+  }
+  assertNonEmpty(cleaner.evidence, 'aiSlopCleaner.evidence');
+  if (!verification || typeof verification !== 'object') throw new UltragoalError('Final quality gate is missing verification evidence.');
+  if (verification.status !== 'passed') throw new UltragoalError('Final quality gate requires verification.status="passed".');
+  if (!Array.isArray(verification.commands) || verification.commands.length === 0 || verification.commands.some((command) => typeof command !== 'string' || command.trim() === '')) {
+    throw new UltragoalError('Final quality gate requires non-empty verification.commands.');
+  }
+  assertNonEmpty(verification.evidence, 'verification.evidence');
+  if (!review || typeof review !== 'object') throw new UltragoalError('Final quality gate is missing codeReview evidence.');
+  if (review.recommendation !== 'APPROVE') {
+    throw new UltragoalError('Final code-review must be clean: codeReview.recommendation must be APPROVE; use record-review-blockers for COMMENT or REQUEST CHANGES.');
+  }
+  if (review.architectStatus !== 'CLEAR') {
+    throw new UltragoalError('Final code-review must be clean: codeReview.architectStatus must be CLEAR; use record-review-blockers for WATCH or BLOCK.');
+  }
+  assertNonEmpty(review.evidence, 'codeReview.evidence');
+  return gate as UltragoalQualityGate;
 }
 
 export async function startNextUltragoal(cwd: string, options: StartNextOptions = {}): Promise<{ plan: UltragoalPlan; goal: UltragoalItem | null; resumed: boolean; done: boolean }> {
@@ -271,7 +390,7 @@ export async function startNextUltragoal(cwd: string, options: StartNextOptions 
     next = plan.goals.find((goal) => goal.status === 'failed');
     if (next) await appendLedger(cwd, { ts: now, event: 'goal_retried', goalId: next.id, status: 'pending', message: next.failureReason });
   }
-  if (!next) return { plan, goal: null, resumed: false, done: plan.goals.every((goal) => goal.status === 'complete') };
+  if (!next) return { plan, goal: null, resumed: false, done: isUltragoalDone(plan) };
 
   next.status = 'in_progress';
   next.attempt += 1;
@@ -325,22 +444,26 @@ export async function checkpointUltragoal(cwd: string, options: CheckpointOption
   if (options.status === 'complete') {
     const expectedObjective = expectedCodexObjective(plan, goal);
     const aggregateMode = codexGoalMode(plan) === 'aggregate';
-    const finalAggregateCheckpoint = aggregateMode && isFinalAggregateCheckpoint(plan, goal);
+    const finalRunCheckpoint = isFinalRunCompletionCandidate(plan, goal);
     const reconciliation = reconcileCodexGoalSnapshot(
       options.codexGoal === undefined ? null : parseCodexGoalSnapshot(options.codexGoal),
       {
         expectedObjective,
         allowedStatuses: aggregateMode
-          ? (finalAggregateCheckpoint ? ['complete'] : ['active'])
+          ? (finalRunCheckpoint && !options.allowActiveFinalCodexGoal ? ['complete'] : ['active'])
           : ['complete'],
         requireSnapshot: true,
-        requireComplete: !aggregateMode || finalAggregateCheckpoint,
+        requireComplete: !aggregateMode || (finalRunCheckpoint && !options.allowActiveFinalCodexGoal),
       },
     );
     if (!reconciliation.ok) {
       throw new UltragoalError(formatCodexGoalReconciliation(reconciliation));
     }
+    if (finalRunCheckpoint && !options.allowActiveFinalCodexGoal) goal.evidence = options.evidence;
   }
+  const qualityGate = options.status === 'complete' && isFinalRunCompletionCandidate(plan, goal) && !options.allowActiveFinalCodexGoal
+    ? validateQualityGate(options.qualityGate)
+    : undefined;
   goal.status = options.status;
   goal.updatedAt = now;
   if (options.status === 'complete') {
@@ -363,8 +486,79 @@ export async function checkpointUltragoal(cwd: string, options: CheckpointOption
     status: goal.status,
     evidence: options.evidence,
     codexGoal: options.codexGoal,
+    qualityGate,
   });
   return plan;
+}
+
+export async function recordFinalReviewBlockers(cwd: string, options: RecordFinalReviewBlockersOptions): Promise<{ plan: UltragoalPlan; blockedGoal: UltragoalItem; addedGoal: UltragoalItem }> {
+  const plan = await readUltragoalPlan(cwd);
+  const goal = plan.goals.find((candidate) => candidate.id === options.goalId);
+  if (!goal) throw new UltragoalError(`Unknown ultragoal id: ${options.goalId}`);
+  assertNonEmpty(options.evidence, '--evidence');
+  if (goal.status !== 'in_progress') {
+    throw new UltragoalError(`Cannot record final review blockers for ${goal.id} while it is ${goal.status}; start or resume the ultragoal first.`);
+  }
+  if (!isFinalRunCompletionCandidate(plan, goal)) {
+    throw new UltragoalError(`Cannot record final review blockers for ${goal.id}; it is not the only unresolved ultragoal story.`);
+  }
+
+  const now = iso(options.now);
+  const expectedObjective = expectedCodexObjective(plan, goal);
+  const aggregateMode = codexGoalMode(plan) === 'aggregate';
+  const reconciliation = reconcileCodexGoalSnapshot(
+    options.codexGoal === undefined ? null : parseCodexGoalSnapshot(options.codexGoal),
+    {
+      expectedObjective,
+      allowedStatuses: ['active'],
+      requireSnapshot: true,
+      requireComplete: false,
+    },
+  );
+  if (!reconciliation.ok) {
+    throw new UltragoalError(formatCodexGoalReconciliation(reconciliation));
+  }
+
+  const addedGoal = appendGoalToPlan(plan, options, now);
+  goal.status = 'review_blocked';
+  goal.reviewBlockedAt = now;
+  goal.updatedAt = now;
+  goal.completedAt = undefined;
+  goal.failedAt = undefined;
+  goal.failureReason = undefined;
+  goal.evidence = options.evidence;
+  if (plan.activeGoalId === goal.id) delete plan.activeGoalId;
+  plan.updatedAt = now;
+
+  await writePlan(cwd, plan);
+  await appendLedger(cwd, {
+    ts: now,
+    event: 'final_review_failed',
+    goalId: goal.id,
+    status: goal.status,
+    evidence: options.evidence,
+    codexGoal: options.codexGoal,
+    message: aggregateMode
+      ? 'Final aggregate code-review was not clean; blocker story was appended while Codex goal remains active.'
+      : 'Final per-story code-review was not clean; blocker story was appended and may require a fresh/available Codex goal context.',
+  });
+  await appendLedger(cwd, {
+    ts: now,
+    event: 'goal_added',
+    goalId: addedGoal.id,
+    status: addedGoal.status,
+    evidence: options.evidence,
+    message: addedGoal.title,
+  });
+  await appendLedger(cwd, {
+    ts: now,
+    event: 'goal_review_blocked',
+    goalId: goal.id,
+    status: goal.status,
+    evidence: options.evidence,
+    codexGoal: options.codexGoal,
+  });
+  return { plan, blockedGoal: goal, addedGoal };
 }
 
 export function buildCodexGoalInstruction(goal: UltragoalItem, plan: UltragoalPlan): string {
@@ -377,6 +571,7 @@ function buildPerStoryCodexGoalInstruction(goal: UltragoalItem, plan: UltragoalP
     objective: goal.objective,
     ...(goal.tokenBudget ? { token_budget: goal.tokenBudget } : {}),
   };
+  const finalStory = isFinalRunCompletionCandidate(plan, goal);
   return [
     'Ultragoal active-goal handoff',
     `Plan: ${plan.goalsPath}`,
@@ -389,8 +584,24 @@ function buildPerStoryCodexGoalInstruction(goal: UltragoalItem, plan: UltragoalP
     '- If get_goal returns a different completed legacy/thread goal and create_goal rejects because this thread already has a completed goal, continue this ultragoal in a fresh Codex thread (same repo/worktree) and create the payload there.',
     `- To preserve the durable ledger before switching threads, record the non-terminal blocker without failing this goal: omx ultragoal checkpoint --goal-id ${goal.id} --status blocked --evidence "<completed legacy Codex goal blocks create_goal in this thread>" --codex-goal-json "<get_goal JSON or path>"`,
     '- Work only this goal until its completion audit passes.',
-    '- After the goal is actually complete, call update_goal({status: "complete"}), call get_goal again for a fresh completion snapshot, then checkpoint the ledger with:',
-    `  omx ultragoal checkpoint --goal-id ${goal.id} --status complete --evidence "<tests/files/PR evidence>" --codex-goal-json "<fresh get_goal JSON or path>"`,
+    finalStory
+      ? '- Final mandatory quality gate: run ai-slop-cleaner on changed files even when it is a no-op, rerun verification, then run $code-review.'
+      : '- This is not the final ultragoal story; do not run the final ai-slop-cleaner/$code-review gate yet.',
+    finalStory
+      ? '- If final $code-review is not APPROVE with architect status CLEAR, do not call update_goal. Record blockers with:'
+      : '- After the goal is actually complete, call update_goal({status: "complete"}), call get_goal again for a fresh completion snapshot, then checkpoint the ledger with:',
+    finalStory
+      ? `  omx ultragoal record-review-blockers --goal-id ${goal.id} --title "Resolve final code-review blockers" --objective "<blocker-resolution objective>" --evidence "<review findings>" --codex-goal-json "<active get_goal JSON or path>"`
+      : `  omx ultragoal checkpoint --goal-id ${goal.id} --status complete --evidence "<tests/files/PR evidence>" --codex-goal-json "<fresh get_goal JSON or path>"`,
+    finalStory
+      ? '- In legacy per-story mode, the blocker story may require a fresh/available Codex goal context because this story remains an active incomplete Codex goal; do not claim it is complete.'
+      : null,
+    finalStory
+      ? '- If final $code-review is clean (APPROVE + CLEAR), call update_goal({status: "complete"}), call get_goal again, then checkpoint with --quality-gate-json:'
+      : null,
+    finalStory
+      ? `  omx ultragoal checkpoint --goal-id ${goal.id} --status complete --evidence "<tests/files/PR evidence>" --codex-goal-json "<fresh complete get_goal JSON or path>" --quality-gate-json "<quality gate JSON or path>"`
+      : null,
     '- If blocked or failed, checkpoint with --status failed and the failure evidence; rerun complete-goals --retry-failed to resume.',
     '',
     'create_goal payload:',
@@ -398,12 +609,12 @@ function buildPerStoryCodexGoalInstruction(goal: UltragoalItem, plan: UltragoalP
     '',
     'Objective:',
     goal.objective,
-  ].join('\n');
+  ].filter((line): line is string => line !== null).join('\n');
 }
 
 function buildAggregateCodexGoalInstruction(goal: UltragoalItem, plan: UltragoalPlan): string {
   const objective = plan.codexObjective ?? aggregateCodexObjective(plan.goals);
-  const finalStory = isFinalAggregateCheckpoint(plan, goal);
+  const finalStory = isFinalRunCompletionCandidate(plan, goal);
   const createPayload = { objective };
   const checkpointStatus = finalStory ? 'complete' : 'active';
   return [
@@ -418,10 +629,21 @@ function buildAggregateCodexGoalInstruction(goal: UltragoalItem, plan: Ultragoal
     '- If get_goal reports the same aggregate objective as active, continue this OMX story without creating a new Codex goal.',
     '- If a different active or incomplete Codex goal exists, finish/checkpoint that goal before starting this ultragoal; do not replace hidden Codex state from the shell.',
     finalStory
-      ? '- This is the final pending story: after the story and whole-run audit pass, call update_goal({status: "complete"}), then call get_goal again for a fresh complete snapshot.'
+      ? '- This is the final pending story: run the mandatory final ai-slop-cleaner pass, rerun verification, and run $code-review before any update_goal call.'
       : '- This is not the final story: do not call update_goal yet; the aggregate Codex goal must remain active while later OMX stories remain.',
+    finalStory
+      ? '- If final $code-review is not APPROVE with architect status CLEAR, do not call update_goal. Record durable blocker work first:'
+      : null,
+    finalStory
+      ? `  omx ultragoal record-review-blockers --goal-id ${goal.id} --title "Resolve final code-review blockers" --objective "<blocker-resolution objective>" --evidence "<review findings>" --codex-goal-json "<active get_goal JSON or path>"`
+      : null,
+    finalStory
+      ? '- If final $code-review is clean (APPROVE + CLEAR), call update_goal({status: "complete"}), call get_goal again for a fresh complete snapshot, then checkpoint with --quality-gate-json.'
+      : null,
     `- Checkpoint this OMX story with a fresh get_goal snapshot whose objective matches the aggregate payload and whose status is ${checkpointStatus}:`,
-    `  omx ultragoal checkpoint --goal-id ${goal.id} --status complete --evidence "<tests/files/PR evidence>" --codex-goal-json "<fresh get_goal JSON or path>"`,
+    finalStory
+      ? `  omx ultragoal checkpoint --goal-id ${goal.id} --status complete --evidence "<tests/files/PR evidence>" --codex-goal-json "<fresh complete get_goal JSON or path>" --quality-gate-json "<quality gate JSON or path>"`
+      : `  omx ultragoal checkpoint --goal-id ${goal.id} --status complete --evidence "<tests/files/PR evidence>" --codex-goal-json "<fresh get_goal JSON or path>"`,
     '- If blocked or failed, checkpoint with --status failed and the failure evidence; rerun complete-goals --retry-failed to resume.',
     '',
     'create_goal payload:',
@@ -432,5 +654,5 @@ function buildAggregateCodexGoalInstruction(goal: UltragoalItem, plan: Ultragoal
     '',
     'Current OMX story objective:',
     goal.objective,
-  ].join('\n');
+  ].filter((line): line is string => line !== null).join('\n');
 }

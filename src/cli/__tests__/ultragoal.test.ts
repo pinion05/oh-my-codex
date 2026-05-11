@@ -17,6 +17,14 @@ async function withCwd<T>(run: (cwd: string) => Promise<T>): Promise<T> {
   }
 }
 
+function cleanQualityGate(): string {
+  return JSON.stringify({
+    aiSlopCleaner: { status: 'passed', evidence: 'ai-slop-cleaner passed' },
+    verification: { status: 'passed', commands: ['npm test'], evidence: 'tests passed after cleaner' },
+    codeReview: { recommendation: 'APPROVE', architectStatus: 'CLEAR', evidence: '$code-review APPROVE + CLEAR' },
+  });
+}
+
 async function capture(run: () => Promise<void>): Promise<{ stdout: string[]; stderr: string[]; exitCode: string | number | undefined }> {
   const stdout: string[] = [];
   const stderr: string[] = [];
@@ -42,6 +50,11 @@ describe('cli/ultragoal', () => {
     assert.match(ULTRAGOAL_HELP, /blocked/);
     assert.match(ULTRAGOAL_HELP, /fresh Codex thread/);
     assert.match(ULTRAGOAL_HELP, /get_goal\/create_goal\/update_goal/);
+    assert.match(ULTRAGOAL_HELP, /add-goal/);
+    assert.match(ULTRAGOAL_HELP, /record-review-blockers/);
+    assert.match(ULTRAGOAL_HELP, /quality-gate-json/);
+    assert.match(ULTRAGOAL_HELP, /ai-slop-cleaner/);
+    assert.match(ULTRAGOAL_HELP, /code-review/);
   });
 
   it('creates and starts goals through the command surface', async () => {
@@ -76,11 +89,56 @@ describe('cli/ultragoal', () => {
         '--status', 'complete',
         '--evidence', 'tests passed',
         '--codex-goal-json', JSON.stringify({ goal: { objective: goals.codexObjective, status: 'complete' } }),
+        '--quality-gate-json', cleanQualityGate(),
         '--json',
       ]));
       assert.equal(checkpoint.exitCode, undefined);
       const parsed = JSON.parse(checkpoint.stdout.join('\n')) as { summary: { complete: number } };
       assert.equal(parsed.summary.complete, 1);
+    });
+  });
+
+  it('adds goals through the command surface', async () => {
+    await withCwd(async () => {
+      await capture(() => ultragoalCommand(['create-goals', '--brief', '- First milestone']));
+      const added = await capture(() => ultragoalCommand([
+        'add-goal',
+        '--title', 'Resolve final code-review blockers',
+        '--objective', 'Fix blockers and rerun gates.',
+        '--evidence', 'review findings',
+        '--json',
+      ]));
+
+      assert.equal(added.exitCode, undefined);
+      const parsed = JSON.parse(added.stdout.join('\n')) as { addedGoal: { id: string; status: string }; summary: { pending: number } };
+      assert.equal(parsed.addedGoal.id, 'G002-resolve-final-code-review-blockers');
+      assert.equal(parsed.addedGoal.status, 'pending');
+      assert.equal(parsed.summary.pending, 2);
+    });
+  });
+
+  it('records final review blockers through the command surface', async () => {
+    await withCwd(async (cwd) => {
+      await capture(() => ultragoalCommand(['create-goals', '--brief', '- Final milestone']));
+      await capture(() => ultragoalCommand(['complete-goals']));
+      const goals = JSON.parse(await readFile(join(cwd, '.omx/ultragoal/goals.json'), 'utf-8')) as { codexObjective: string };
+
+      const blocked = await capture(() => ultragoalCommand([
+        'record-review-blockers',
+        '--goal-id', 'G001-final-milestone',
+        '--title', 'Resolve final code-review blockers',
+        '--objective', 'Fix blockers and rerun final gates.',
+        '--evidence', 'code-review REQUEST CHANGES',
+        '--codex-goal-json', JSON.stringify({ goal: { objective: goals.codexObjective, status: 'active' } }),
+        '--json',
+      ]));
+
+      assert.equal(blocked.exitCode, undefined);
+      const parsed = JSON.parse(blocked.stdout.join('\n')) as { blockedGoal: { status: string }; addedGoal: { status: string }; summary: { reviewBlocked: number; pending: number } };
+      assert.equal(parsed.blockedGoal.status, 'review_blocked');
+      assert.equal(parsed.addedGoal.status, 'pending');
+      assert.equal(parsed.summary.reviewBlocked, 1);
+      assert.equal(parsed.summary.pending, 1);
     });
   });
 
@@ -118,6 +176,26 @@ describe('cli/ultragoal', () => {
       ]));
       assert.equal(mismatch.exitCode, 1);
       assert.match(mismatch.stderr.join('\n'), /objective mismatch/);
+    });
+  });
+
+  it('fails closed for malformed final quality-gate json', async () => {
+    await withCwd(async (cwd) => {
+      await capture(() => ultragoalCommand(['create-goals', '--brief', '- First milestone']));
+      await capture(() => ultragoalCommand(['complete-goals']));
+      const goals = JSON.parse(await readFile(join(cwd, '.omx/ultragoal/goals.json'), 'utf-8')) as { codexObjective: string };
+
+      const malformed = await capture(() => ultragoalCommand([
+        'checkpoint',
+        '--goal-id', 'G001-first-milestone',
+        '--status', 'complete',
+        '--evidence', 'tests passed',
+        '--codex-goal-json', JSON.stringify({ goal: { objective: goals.codexObjective, status: 'complete' } }),
+        '--quality-gate-json', '{bad json',
+      ]));
+
+      assert.equal(malformed.exitCode, 1);
+      assert.match(malformed.stderr.join('\n'), /Invalid --quality-gate-json/);
     });
   });
 

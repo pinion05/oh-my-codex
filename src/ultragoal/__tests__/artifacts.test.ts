@@ -4,10 +4,13 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
+  addUltragoalGoal,
   buildCodexGoalInstruction,
   checkpointUltragoal,
   createUltragoalPlan,
+  isUltragoalDone,
   readUltragoalPlan,
+  recordFinalReviewBlockers,
   startNextUltragoal,
 } from '../artifacts.js';
 
@@ -18,6 +21,14 @@ async function withTempRepo<T>(run: (cwd: string) => Promise<T>): Promise<T> {
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }
+}
+
+function cleanQualityGate(): object {
+  return {
+    aiSlopCleaner: { status: 'passed', evidence: 'ai-slop-cleaner ran on changed files' },
+    verification: { status: 'passed', commands: ['npm test'], evidence: 'tests passed after cleaner' },
+    codeReview: { recommendation: 'APPROVE', architectStatus: 'CLEAR', evidence: '$code-review approved with CLEAR architecture' },
+  };
 }
 
 describe('ultragoal artifacts', () => {
@@ -160,6 +171,7 @@ describe('ultragoal artifacts', () => {
         status: 'complete',
         evidence: 'final audit passed',
         codexGoal: { goal: { objective: aggregateObjective, status: 'complete' } },
+        qualityGate: cleanQualityGate(),
       });
 
       const plan = await readUltragoalPlan(cwd);
@@ -191,10 +203,149 @@ describe('ultragoal artifacts', () => {
         status: 'complete',
         evidence: 'legacy per-story audit passed',
         codexGoal: { goal: { objective: first.goal!.objective, status: 'complete' } },
+        qualityGate: cleanQualityGate(),
       });
 
       const plan = await readUltragoalPlan(cwd);
       assert.equal(plan.goals[0]?.status, 'complete');
+    });
+  });
+
+  it('appends goals without changing the stored aggregate objective', async () => {
+    await withTempRepo(async (cwd) => {
+      const plan = await createUltragoalPlan(cwd, {
+        brief: 'brief',
+        goals: [{ title: 'First', objective: 'Complete first milestone.' }],
+      });
+      const objective = plan.codexObjective;
+      const added = await addUltragoalGoal(cwd, {
+        title: 'Resolve final code-review blockers',
+        objective: 'Fix review blockers and rerun final gates.',
+        evidence: 'review findings',
+      });
+
+      assert.equal(added.goal.id, 'G002-resolve-final-code-review-blockers');
+      assert.equal(added.goal.status, 'pending');
+      assert.equal(added.plan.codexObjective, objective);
+
+      const ledger = await readFile(join(cwd, '.omx/ultragoal/ledger.jsonl'), 'utf-8');
+      assert.match(ledger, /"event":"goal_added"/);
+    });
+  });
+
+  it('records final aggregate review blockers atomically and starts the blocker next', async () => {
+    await withTempRepo(async (cwd) => {
+      await createUltragoalPlan(cwd, {
+        brief: 'brief',
+        goals: [{ title: 'Final', objective: 'Complete final milestone.' }],
+      });
+      const started = await startNextUltragoal(cwd);
+      const objective = started.plan.codexObjective!;
+
+      const result = await recordFinalReviewBlockers(cwd, {
+        goalId: started.goal!.id,
+        title: 'Resolve final code-review blockers',
+        objective: 'Fix final code-review blockers and rerun final gates.',
+        evidence: 'code-review REQUEST CHANGES',
+        codexGoal: { goal: { objective, status: 'active' } },
+      });
+
+      assert.equal(result.blockedGoal.status, 'review_blocked');
+      assert.equal(result.addedGoal.status, 'pending');
+      assert.equal(result.plan.activeGoalId, undefined);
+      assert.equal(result.plan.codexObjective, objective);
+
+      const next = await startNextUltragoal(cwd);
+      assert.equal(next.goal?.id, result.addedGoal.id);
+
+      const ledger = await readFile(join(cwd, '.omx/ultragoal/ledger.jsonl'), 'utf-8');
+      assert.match(ledger, /"event":"final_review_failed"/);
+      assert.match(ledger, /"event":"goal_review_blocked"/);
+    });
+  });
+
+  it('records final per-story review blockers without claiming Codex completion', async () => {
+    await withTempRepo(async (cwd) => {
+      await createUltragoalPlan(cwd, {
+        brief: 'brief',
+        codexGoalMode: 'per_story',
+        goals: [{ title: 'Final', objective: 'Complete final milestone.' }],
+      });
+      const started = await startNextUltragoal(cwd);
+      const result = await recordFinalReviewBlockers(cwd, {
+        goalId: started.goal!.id,
+        title: 'Resolve final code-review blockers',
+        objective: 'Fix final code-review blockers in a fresh goal context.',
+        evidence: 'architect BLOCK',
+        codexGoal: { goal: { objective: started.goal!.objective, status: 'active' } },
+      });
+
+      assert.equal(result.blockedGoal.status, 'review_blocked');
+      assert.equal(result.addedGoal.status, 'pending');
+      assert.equal(isUltragoalDone(result.plan), false);
+    });
+  });
+
+  it('requires structured final quality gate evidence for clean completion', async () => {
+    await withTempRepo(async (cwd) => {
+      await createUltragoalPlan(cwd, {
+        brief: 'brief',
+        goals: [{ title: 'Final', objective: 'Complete final milestone.' }],
+      });
+      const started = await startNextUltragoal(cwd);
+      const objective = started.plan.codexObjective!;
+
+      await assert.rejects(
+        () => checkpointUltragoal(cwd, {
+          goalId: started.goal!.id,
+          status: 'complete',
+          evidence: 'tests passed',
+          codexGoal: { goal: { objective, status: 'complete' } },
+        }),
+        /quality-gate-json|quality gate/i,
+      );
+
+      await assert.rejects(
+        () => checkpointUltragoal(cwd, {
+          goalId: started.goal!.id,
+          status: 'complete',
+          evidence: 'tests passed',
+          codexGoal: { goal: { objective, status: 'complete' } },
+          qualityGate: {
+            ...cleanQualityGate(),
+            codeReview: { recommendation: 'COMMENT', architectStatus: 'CLEAR', evidence: 'not clean' },
+          },
+        }),
+        /APPROVE/,
+      );
+
+      await assert.rejects(
+        () => checkpointUltragoal(cwd, {
+          goalId: started.goal!.id,
+          status: 'complete',
+          evidence: 'tests passed',
+          codexGoal: { goal: { objective, status: 'complete' } },
+          qualityGate: {
+            ...cleanQualityGate(),
+            aiSlopCleaner: { status: 'not_applicable', evidence: 'skipped cleaner' },
+          },
+        }),
+        /aiSlopCleaner\.status="passed"/,
+      );
+
+      await checkpointUltragoal(cwd, {
+        goalId: started.goal!.id,
+        status: 'complete',
+        evidence: 'final gates passed',
+        codexGoal: { goal: { objective, status: 'complete' } },
+        qualityGate: cleanQualityGate(),
+      });
+      const plan = await readUltragoalPlan(cwd);
+      assert.equal(isUltragoalDone(plan), true);
+      const ledger = await readFile(join(cwd, '.omx/ultragoal/ledger.jsonl'), 'utf-8');
+      assert.match(ledger, /"qualityGate"/);
+      assert.match(ledger, /"aiSlopCleaner"/);
+      assert.match(ledger, /"codeReview"/);
     });
   });
 

@@ -6,10 +6,12 @@ import {
   reconcileCodexGoalSnapshot,
 } from '../goal-workflows/codex-goal-snapshot.js';
 import {
+  addUltragoalGoal,
   buildCodexGoalInstruction,
   checkpointUltragoal,
   createUltragoalPlan,
   readUltragoalPlan,
+  recordFinalReviewBlockers,
   startNextUltragoal,
   summarizeUltragoalPlan,
   type UltragoalItem,
@@ -21,7 +23,9 @@ export const ULTRAGOAL_HELP = `omx ultragoal - Durable repo-native multi-goal wo
 Usage:
   omx ultragoal create-goals [--brief <text> | --brief-file <path> | --from-stdin] [--goal <title::objective>] [--codex-goal-mode <aggregate|per-story>] [--force] [--json]
   omx ultragoal complete-goals [--retry-failed] [--json]
-  omx ultragoal checkpoint --goal-id <id> --status <complete|failed|blocked> [--evidence <text>] [--codex-goal-json <json-or-path>] [--json]
+  omx ultragoal add-goal --title <title> --objective <text> [--evidence <text>] [--json]
+  omx ultragoal record-review-blockers --goal-id <id> --title <title> --objective <text> --evidence <review-findings> --codex-goal-json <active-json-or-path> [--json]
+  omx ultragoal checkpoint --goal-id <id> --status <complete|failed|blocked> [--evidence <text>] [--codex-goal-json <json-or-path>] [--quality-gate-json <json-or-path>] [--json]
   omx ultragoal status [--codex-goal-json <json-or-path>] [--json]
 
 Aliases:
@@ -40,6 +44,9 @@ Codex goal integration:
   run while OMX checkpoints G001/G002 stories in the durable ledger. Legacy
   per-story plans retain fresh Codex thread blocker handling when a completed thread
   goal prevents create_goal for the next story.
+  Final completion is mandatory-gated: run ai-slop-cleaner, rerun verification,
+  run $code-review, and pass --quality-gate-json with APPROVE + CLEAR evidence.
+  Non-clean final review must use record-review-blockers before update_goal.
 `;
 
 function hasFlag(args: readonly string[], flag: string): boolean {
@@ -81,7 +88,7 @@ async function readStdin(): Promise<string> {
 }
 
 function positionalText(args: readonly string[]): string {
-  const valueTaking = new Set(['--brief', '--brief-file', '--goal', '--goal-id', '--status', '--evidence', '--codex-goal-json', '--codex-goal-mode']);
+  const valueTaking = new Set(['--brief', '--brief-file', '--goal', '--goal-id', '--status', '--evidence', '--codex-goal-json', '--codex-goal-mode', '--title', '--objective', '--quality-gate-json']);
   const words: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -105,7 +112,7 @@ function normalizeCodexGoalMode(raw: string | undefined): 'aggregate' | 'per_sto
 
 function printStatus(plan: Awaited<ReturnType<typeof readUltragoalPlan>>): void {
   const summary = summarizeUltragoalPlan(plan);
-  console.log(`ultragoal: ${summary.complete}/${summary.total} complete, ${summary.pending} pending, ${summary.inProgress} in progress, ${summary.failed} failed`);
+  console.log(`ultragoal: ${summary.complete}/${summary.total} complete, ${summary.pending} pending, ${summary.inProgress} in progress, ${summary.failed} failed, ${summary.reviewBlocked} review-blocked`);
   for (const goal of plan.goals) {
     const marker = goal.id === plan.activeGoalId ? '*' : '-';
     console.log(`${marker} ${goal.id} [${goal.status}] ${goal.title}`);
@@ -115,6 +122,18 @@ function printStatus(plan: Awaited<ReturnType<typeof readUltragoalPlan>>): void 
 async function parseCodexGoalJson(raw: string | undefined): Promise<unknown> {
   if (!raw) return undefined;
   return readCodexGoalSnapshotInput(raw, process.cwd());
+}
+
+async function readJsonInput(raw: string | undefined): Promise<unknown> {
+  if (!raw) return undefined;
+  try {
+    const trimmed = raw.trim();
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) return JSON.parse(trimmed);
+    return JSON.parse(await readFile(trimmed, 'utf-8'));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new UltragoalError(`Invalid --quality-gate-json: ${message}`);
+  }
 }
 
 export async function ultragoalCommand(args: string[]): Promise<void> {
@@ -176,6 +195,39 @@ export async function ultragoalCommand(args: string[]): Promise<void> {
       return;
     }
 
+    if (command === 'add-goal') {
+      const title = readValue(rest, '--title');
+      const objective = readValue(rest, '--objective');
+      if (!title?.trim()) throw new UltragoalError('Missing --title.');
+      if (!objective?.trim()) throw new UltragoalError('Missing --objective.');
+      const result = await addUltragoalGoal(cwd, { title, objective, evidence: readValue(rest, '--evidence') });
+      if (json) printJson({ ok: true, plan: result.plan, addedGoal: result.goal, summary: summarizeUltragoalPlan(result.plan) });
+      else {
+        console.log(`ultragoal added goal: ${result.goal.id}`);
+        printStatus(result.plan);
+      }
+      return;
+    }
+
+    if (command === 'record-review-blockers') {
+      const goalId = readValue(rest, '--goal-id');
+      const title = readValue(rest, '--title');
+      const objective = readValue(rest, '--objective');
+      const evidence = readValue(rest, '--evidence');
+      if (!goalId) throw new UltragoalError('Missing --goal-id.');
+      if (!title?.trim()) throw new UltragoalError('Missing --title.');
+      if (!objective?.trim()) throw new UltragoalError('Missing --objective.');
+      if (!evidence?.trim()) throw new UltragoalError('Missing --evidence.');
+      const codexGoal = await parseCodexGoalJson(readValue(rest, '--codex-goal-json'));
+      const result = await recordFinalReviewBlockers(cwd, { goalId, title, objective, evidence, codexGoal });
+      if (json) printJson({ ok: true, plan: result.plan, blockedGoal: result.blockedGoal, addedGoal: result.addedGoal, summary: summarizeUltragoalPlan(result.plan) });
+      else {
+        console.log(`ultragoal final review blockers recorded: ${result.blockedGoal.id} -> review_blocked; added ${result.addedGoal.id}`);
+        printStatus(result.plan);
+      }
+      return;
+    }
+
     if (command === 'complete' || command === 'complete-goals' || command === 'next' || command === 'start-next') {
       const result = await startNextUltragoal(cwd, { retryFailed: hasFlag(rest, '--retry-failed') });
       if (!result.goal) {
@@ -196,7 +248,8 @@ export async function ultragoalCommand(args: string[]): Promise<void> {
       if (status !== 'complete' && status !== 'failed' && status !== 'blocked') throw new UltragoalError('Missing or invalid --status; expected complete, failed, or blocked.');
       const evidence = readValue(rest, '--evidence');
       const codexGoal = await parseCodexGoalJson(readValue(rest, '--codex-goal-json'));
-      const plan = await checkpointUltragoal(cwd, { goalId, status, evidence, codexGoal });
+      const qualityGate = await readJsonInput(readValue(rest, '--quality-gate-json'));
+      const plan = await checkpointUltragoal(cwd, { goalId, status, evidence, codexGoal, qualityGate });
       if (json) printJson({ ok: true, plan, summary: summarizeUltragoalPlan(plan) });
       else {
         const goal = plan.goals.find((candidate: UltragoalItem) => candidate.id === goalId);
