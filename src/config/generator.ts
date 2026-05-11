@@ -24,7 +24,10 @@ import {
   normalizeCodexHookFeatureFlag,
   type CodexHookFeatureFlag,
 } from "./codex-feature-flags.js";
-import { getOmxFirstPartySetupMcpServers } from "./omx-first-party-mcp.js";
+import {
+  OMX_FIRST_PARTY_MCP_SERVER_NAMES,
+  getOmxFirstPartySetupMcpServers,
+} from "./omx-first-party-mcp.js";
 import { buildManagedCodexHookTrustToml } from "./codex-hooks.js";
 import type { HudPreset } from "../hud/types.js";
 
@@ -39,10 +42,15 @@ interface MergeOptions {
   statusLinePreset?: HudPreset;
   forceStatusLinePreset?: boolean;
   notifyCommand?: string[] | false;
+  includeFirstPartyMcp?: boolean;
 }
 
 function escapeTomlString(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 // ---------------------------------------------------------------------------
@@ -1159,6 +1167,17 @@ export function stripOmxEnvSettings(config: string): string {
  * Check whether a TOML table name belongs to a legacy OMX-managed agent entry.
  * Handles both `agents.name` and `agents."name"` forms.
  */
+
+function isOmxFirstPartyMcpSection(tableName: string): boolean {
+  const match = tableName.match(/^mcp_servers\.(?:"([^"]+)"|([A-Za-z0-9_-]+))$/);
+  const name = match?.[1] ?? match?.[2];
+  return Boolean(
+    name &&
+      ((OMX_FIRST_PARTY_MCP_SERVER_NAMES as readonly string[]).includes(name) ||
+        name === "omx_team_run"),
+  );
+}
+
 function isLegacyOmxAgentSection(tableName: string): boolean {
   const m = tableName.match(/^agents\.(?:"([^"]+)"|(\w[\w-]*))$/);
   if (!m) return false;
@@ -1171,7 +1190,8 @@ function isLegacyOmxAgentSection(tableName: string): boolean {
  * This covers legacy configs that were written before markers were added,
  * or configs where the marker was accidentally removed.
  *
- * Targets: [mcp_servers.omx_*], legacy [agents.<name>] entries, [tui]
+ * Targets: exact first-party [mcp_servers.<name>] entries, retired
+ * [mcp_servers.omx_team_run], and legacy [agents.<name>] entries.
  */
 function stripOrphanedOmxSections(config: string): string {
   const lines = config.split(/\r?\n/);
@@ -1188,7 +1208,7 @@ function stripOrphanedOmxSections(config: string): string {
       // The marker-based stripExistingOmxBlocks already handles [tui]
       // when it lives inside the OMX marker block.
       const isOmxSection =
-        /^mcp_servers\.omx_/.test(tableName) ||
+        isOmxFirstPartyMcpSection(tableName) ||
         isLegacyOmxAgentSection(tableName);
 
       if (isOmxSection) {
@@ -1492,6 +1512,88 @@ export function stripExistingSharedMcpRegistryBlock(config: string): {
   return { cleaned, removed };
 }
 
+function getExistingSharedMcpRegistryBlocks(config: string): string[] {
+  const blocks: string[] = [];
+  let cursor = 0;
+
+  while (cursor < config.length) {
+    const markerIdx = config.indexOf(SHARED_MCP_REGISTRY_MARKER, cursor);
+    if (markerIdx < 0) break;
+
+    let blockStart = config.lastIndexOf("\n", markerIdx);
+    blockStart = blockStart >= 0 ? blockStart + 1 : 0;
+
+    const previousLineEnd = blockStart - 1;
+    if (previousLineEnd >= 0) {
+      const previousLineStart = config.lastIndexOf("\n", previousLineEnd - 1);
+      const previousLine = config.slice(previousLineStart + 1, previousLineEnd);
+      if (/^# =+$/.test(previousLine.trim())) {
+        blockStart = previousLineStart >= 0 ? previousLineStart + 1 : 0;
+      }
+    }
+
+    let blockEnd = config.length;
+    const endIdx = config.indexOf(SHARED_MCP_REGISTRY_END_MARKER, markerIdx);
+    if (endIdx >= 0) {
+      const endLineBreak = config.indexOf("\n", endIdx);
+      blockEnd = endLineBreak >= 0 ? endLineBreak + 1 : config.length;
+    }
+
+    blocks.push(config.slice(blockStart, blockEnd));
+    cursor = blockEnd;
+  }
+
+  return blocks;
+}
+
+export function extractSharedMcpRegistryServersFromConfig(config: string): {
+  servers: UnifiedMcpRegistryServer[];
+  sourcePath?: string;
+} {
+  const servers: UnifiedMcpRegistryServer[] = [];
+  let sourcePath: string | undefined;
+
+  for (const block of getExistingSharedMcpRegistryBlocks(config)) {
+    sourcePath ??= block.match(/^# Source:\s*(.+?)\s*$/m)?.[1];
+
+    let parsed: unknown;
+    try {
+      parsed = TOML.parse(block);
+    } catch {
+      continue;
+    }
+
+    if (!isRecord(parsed) || !isRecord(parsed.mcp_servers)) continue;
+
+    for (const [name, value] of Object.entries(parsed.mcp_servers)) {
+      if (!isRecord(value) || typeof value.command !== "string") continue;
+      const args = Array.isArray(value.args)
+        ? value.args.filter((arg): arg is string => typeof arg === "string")
+        : [];
+      const enabled =
+        typeof value.enabled === "boolean" ? value.enabled : true;
+      const timeoutCandidate =
+        typeof value.startup_timeout_sec === "number"
+          ? value.startup_timeout_sec
+          : value.startupTimeoutSec;
+      const startupTimeoutSec =
+        typeof timeoutCandidate === "number" && Number.isFinite(timeoutCandidate)
+          ? timeoutCandidate
+          : undefined;
+
+      servers.push({
+        name,
+        command: value.command,
+        args,
+        enabled,
+        ...(startupTimeoutSec !== undefined ? { startupTimeoutSec } : {}),
+      });
+    }
+  }
+
+  return { servers, sourcePath };
+}
+
 function toMcpServerTableKey(name: string): string {
   if (/^[A-Za-z0-9_-]+$/.test(name)) {
     return `mcp_servers.${name}`;
@@ -1664,6 +1766,29 @@ function getSharedMcpRegistryBlock(
   return lines.join("\n");
 }
 
+export function mergeSharedMcpRegistryBlock(
+  config: string,
+  servers: UnifiedMcpRegistryServer[],
+  sourcePath?: string,
+): string {
+  const stripped = stripExistingSharedMcpRegistryBlock(config);
+  const existing = stripped.cleaned;
+  const sharedRegistryBlock = getSharedMcpRegistryBlock(
+    servers,
+    sourcePath,
+    existing,
+  );
+  const body = existing.trimEnd();
+  const merged = sharedRegistryBlock
+    ? body
+      ? `${body}\n\n${sharedRegistryBlock}\n`
+      : `${sharedRegistryBlock}\n`
+    : body
+      ? `${body}\n`
+      : "";
+  return addDefaultLauncherMcpStartupTimeouts(merged);
+}
+
 /**
  * OMX table-section block (MCP servers, TUI).
  * Contains ONLY [table] sections — no bare keys.
@@ -1673,6 +1798,7 @@ function getOmxTablesBlock(
   includeTui = true,
   statusLinePreset: HudPreset = DEFAULT_STATUS_LINE_PRESET,
   codexHooksFile?: string,
+  includeFirstPartyMcp = false,
 ): string {
   const lines = [
     "",
@@ -1682,19 +1808,21 @@ function getOmxTablesBlock(
     "# ============================================================",
   ];
 
-  for (const server of getOmxFirstPartySetupMcpServers(pkgRoot)) {
-    lines.push("");
-    lines.push(server.title);
-    lines.push(`[mcp_servers.${server.name}]`);
-    lines.push(`command = "${escapeTomlString(server.command)}"`);
-    lines.push(
-      `args = [${server.args
-        .map((arg) => `"${escapeTomlString(arg)}"`)
-        .join(", ")}]`,
-    );
-    lines.push(`enabled = ${server.enabled ? "true" : "false"}`);
-    if (typeof server.startupTimeoutSec === "number") {
-      lines.push(`startup_timeout_sec = ${server.startupTimeoutSec}`);
+  if (includeFirstPartyMcp) {
+    for (const server of getOmxFirstPartySetupMcpServers(pkgRoot)) {
+      lines.push("");
+      lines.push(server.title);
+      lines.push(`[mcp_servers.${server.name}]`);
+      lines.push(`command = "${escapeTomlString(server.command)}"`);
+      lines.push(
+        `args = [${server.args
+          .map((arg) => `"${escapeTomlString(arg)}"`)
+          .join(", ")}]`,
+      );
+      lines.push(`enabled = ${server.enabled ? "true" : "false"}`);
+      if (typeof server.startupTimeoutSec === "number") {
+        lines.push(`startup_timeout_sec = ${server.startupTimeoutSec}`);
+      }
     }
   }
 
@@ -1806,6 +1934,7 @@ export function buildMergedConfig(
     includeTui && !tuiUpsert.hadExistingTui,
     statusLinePreset,
     options.codexHooksFile,
+    options.includeFirstPartyMcp === true,
   );
   const sharedRegistryBlock = getSharedMcpRegistryBlock(
     options.sharedMcpServers ?? [],

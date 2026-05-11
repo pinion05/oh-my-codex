@@ -8,7 +8,14 @@ import { basename, dirname, join, posix, win32 } from "path";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
 import { copyFile, cp, lstat, mkdir, readFile, readdir, rm, symlink, writeFile } from "fs/promises";
 import { constants as osConstants, homedir } from "os";
-import { setup, SETUP_SCOPES, type SetupInstallMode, type SetupScope } from "./setup.js";
+import {
+  setup,
+  SETUP_MCP_MODES,
+  SETUP_SCOPES,
+  type SetupInstallMode,
+  type SetupMcpMode,
+  type SetupScope,
+} from "./setup.js";
 import { uninstall } from "./uninstall.js";
 import { version } from "./version.js";
 import { tmuxHookCommand } from "./tmux-hook.js";
@@ -57,6 +64,7 @@ import {
 } from "../mcp/state-paths.js";
 import { evaluateRalphCompletionAuditEvidence, isRalphCompletePhase } from "../ralph/completion-audit.js";
 import {
+  readPersistedSetupPreferences,
   resolveCodexConfigPathForLaunch,
   resolveCodexHomeForLaunch,
   resolveProjectLocalCodexHomeForLaunch,
@@ -112,7 +120,9 @@ import {
 } from "../team/tmux-session.js";
 import { getPackageRoot } from "../utils/package.js";
 import { codexConfigPath, omxRoot, rememberOmxLaunchContext, resolveOmxEntryPath } from "../utils/paths.js";
-import { cleanCodexModelAvailabilityNuxIfNeeded, repairConfigIfNeeded, upsertManagedCodexHookTrustState } from "../config/generator.js";
+import { cleanCodexModelAvailabilityNuxIfNeeded, extractSharedMcpRegistryServersFromConfig, repairConfigIfNeeded, upsertManagedCodexHookTrustState } from "../config/generator.js";
+import type { UnifiedMcpRegistryServer } from "../config/mcp-registry.js";
+import { OMX_FIRST_PARTY_MCP_SERVER_NAMES } from "../config/omx-first-party-mcp.js";
 import { HUD_TMUX_HEIGHT_LINES } from "../hud/constants.js";
 import { OMX_TMUX_HUD_OWNER_ENV } from "../hud/reconcile.js";
 import {
@@ -179,7 +189,7 @@ Usage:
                 Queue audited follow-up instructions for a running non-interactive exec job
   omx imagegen continuation <session-id> --artifact <name>
                 Queue a Stop-hook continuation for built-in image generation turns
-  omx setup     Install skills, prompts, MCP servers, and scope-specific AGENTS.md
+  omx setup     Install skills, prompts, CLI-first config, and scope-specific AGENTS.md
                 (user scope prompts for legacy vs plugin skill delivery when needed)
   omx update    Check npm now, update the global install immediately, then refresh setup
   omx uninstall Remove OMX configuration and clean up installed artifacts
@@ -212,13 +222,13 @@ Usage:
   omx hud       Show HUD statusline (--watch, --json, --preset=NAME)
   omx sidecar   Show read-only team/multi-agent visualization (--watch, --json, --tmux)
   omx state     Read/write/list OMX mode state via CLI parity surface
-  omx notepad   CLI parity for OMX notepad MCP tools
+  omx notepad   JSON CLI surface for OMX notepad operations
   omx project-memory
-                CLI parity for OMX project-memory MCP tools
-  omx trace     CLI parity for OMX trace MCP tools
+                JSON CLI surface for OMX project-memory operations
+  omx trace     JSON CLI surface for OMX trace operations
   omx code-intel
-                CLI parity for OMX code-intel MCP tools
-  omx wiki      CLI parity for OMX wiki MCP tools
+                JSON CLI surface for OMX code-intel operations
+  omx wiki      JSON CLI surface for OMX wiki operations
   omx mcp-serve Launch an OMX stdio MCP server target (plugin/runtime use)
   omx sparkshell <command> [args...]
   omx sparkshell --tmux-pane <pane-id> [--tail-lines <100-1000>]
@@ -260,6 +270,10 @@ Options:
   --legacy      Use legacy setup delivery for omx setup, overriding persisted plugin mode
   --install-mode <legacy|plugin>
                 Explicit setup install mode (canonical form; --legacy/--plugin are aliases)
+  --mcp <none|compat>
+                Explicit setup MCP mode (default: none; compat enables first-party MCP compatibility and shared registry sync)
+  --no-mcp      Alias for --mcp=none
+  --with-mcp    Alias for --mcp=compat
   --keep-config Skip config.toml cleanup during uninstall
   --purge       Remove .omx/ cache directory during uninstall
   --verbose     Show detailed output
@@ -435,6 +449,55 @@ export function resolveSetupInstallModeArg(args: string[]): SetupInstallMode | u
         );
       }
       setValue(next, "--install-mode");
+    }
+  }
+
+  return value;
+}
+
+
+export function resolveSetupMcpModeArg(args: string[]): SetupMcpMode | undefined {
+  let value: SetupMcpMode | undefined;
+  const setValue = (next: SetupMcpMode, source: string): void => {
+    if (value && value !== next) {
+      throw new Error(
+        `Conflicting setup MCP mode flags: ${source} selects ${next}, but another flag already selected ${value}`,
+      );
+    }
+    value = next;
+  };
+  const parseValue = (next: string): SetupMcpMode => {
+    if (!SETUP_MCP_MODES.includes(next as SetupMcpMode)) {
+      throw new Error(
+        `Invalid setup MCP mode: ${next}. Expected one of: none, compat`,
+      );
+    }
+    return next as SetupMcpMode;
+  };
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--no-mcp") {
+      setValue("none", arg);
+      continue;
+    }
+    if (arg === "--with-mcp") {
+      setValue("compat", arg);
+      continue;
+    }
+    if (arg === "--mcp") {
+      const next = args[index + 1];
+      if (!next || next.startsWith("-")) {
+        throw new Error(
+          `Missing setup MCP mode value after --mcp. Expected one of: none, compat`,
+        );
+      }
+      setValue(parseValue(next), arg);
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--mcp=")) {
+      setValue(parseValue(arg.slice("--mcp=".length)), "--mcp");
     }
   }
 
@@ -954,6 +1017,52 @@ export function classifyCodexExecFailure(
   };
 }
 
+export async function resolveLaunchConfigRepairOptions(
+  cwd: string,
+  configPath: string,
+): Promise<{
+  includeFirstPartyMcp: boolean;
+  sharedMcpServers?: UnifiedMcpRegistryServer[];
+  sharedMcpRegistrySource?: string;
+}> {
+  let content: string | undefined;
+  const readConfig = async (): Promise<string | undefined> => {
+    if (content !== undefined) return content;
+    if (!existsSync(configPath)) return undefined;
+    content = await readFile(configPath, "utf-8");
+    return content;
+  };
+
+  const existingContent = await readConfig();
+  const sharedMcpRegistry = existingContent
+    ? extractSharedMcpRegistryServersFromConfig(existingContent)
+    : { servers: [] };
+  const sharedMcpOptions =
+    sharedMcpRegistry.servers.length > 0
+      ? {
+          sharedMcpServers: sharedMcpRegistry.servers,
+          sharedMcpRegistrySource: sharedMcpRegistry.sourcePath,
+        }
+      : {};
+
+  if (readPersistedSetupPreferences(cwd)?.mcpMode === "compat") {
+    return { includeFirstPartyMcp: true, ...sharedMcpOptions };
+  }
+
+  if (existingContent) {
+    const hasExistingFirstPartyMcp = OMX_FIRST_PARTY_MCP_SERVER_NAMES.some((name) =>
+      new RegExp(`^\\s*\\[mcp_servers\\.${name}\\]\\s*$`, "m").test(existingContent),
+    );
+    if (hasExistingFirstPartyMcp || sharedMcpRegistry.servers.length > 0) {
+      return { includeFirstPartyMcp: hasExistingFirstPartyMcp, ...sharedMcpOptions };
+    }
+  }
+
+  return {
+    includeFirstPartyMcp: false,
+  };
+}
+
 function runCodexBlocking(
   cwd: string,
   launchArgs: string[],
@@ -1185,6 +1294,7 @@ export async function main(args: string[]): Promise<void> {
           verbose: options.verbose,
           scope: resolveSetupScopeArg(args.slice(1)),
           installMode: resolveSetupInstallModeArg(args.slice(1)),
+          mcpMode: resolveSetupMcpModeArg(args.slice(1)),
         });
         break;
       case "update":
@@ -1508,9 +1618,11 @@ export async function launchWithHud(args: string[]): Promise<void> {
   // have written a config.toml with duplicate [tui] sections.  Codex CLI's
   // TOML parser rejects duplicates, so we repair before spawning the CLI.
   try {
+    const configPath = resolveCodexConfigPathForLaunch(launchCwd, process.env);
     const repaired = await repairConfigIfNeeded(
-      resolveCodexConfigPathForLaunch(launchCwd, process.env),
+      configPath,
       getPackageRoot(),
+      await resolveLaunchConfigRepairOptions(launchCwd, configPath),
     );
     if (repaired) {
       console.log("[omx] Repaired managed config.toml compatibility issue.");
@@ -1619,9 +1731,11 @@ export async function execWithOverlay(args: string[]): Promise<void> {
   }
 
   try {
+    const configPath = resolveCodexConfigPathForLaunch(launchCwd, process.env);
     const repaired = await repairConfigIfNeeded(
-      resolveCodexConfigPathForLaunch(launchCwd, process.env),
+      configPath,
       getPackageRoot(),
+      await resolveLaunchConfigRepairOptions(launchCwd, configPath),
     );
     if (repaired) {
       console.log("[omx] Repaired managed config.toml compatibility issue.");

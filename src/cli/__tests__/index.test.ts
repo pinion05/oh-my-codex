@@ -31,7 +31,9 @@ import {
   injectModelInstructionsBypassArgs,
   resolveWorkerSparkModel,
   resolveSetupInstallModeArg,
+  resolveSetupMcpModeArg,
   resolveSetupScopeArg,
+  resolveLaunchConfigRepairOptions,
   readPersistedSetupPreferences,
   readPersistedSetupScope,
   resolveCodexConfigPathForLaunch,
@@ -68,6 +70,7 @@ import {
   withTmuxExtendedKeys,
   CODEX_SQLITE_HOME_ENV,
 } from "../index.js";
+import { mergeConfig, repairConfigIfNeeded } from "../../config/generator.js";
 import { ensureReusableNodeModules } from "../../utils/repo-deps.js";
 import { readAllState } from "../../hud/state.js";
 import { generateOverlay } from "../../hooks/agents-overlay.js";
@@ -1578,6 +1581,37 @@ describe("resolveSetupInstallModeArg", () => {
   });
 });
 
+
+describe("resolveSetupMcpModeArg", () => {
+  it("maps explicit setup MCP mode flags", () => {
+    assert.equal(resolveSetupMcpModeArg(["--dry-run"]), undefined);
+    assert.equal(resolveSetupMcpModeArg(["--no-mcp"]), "none");
+    assert.equal(resolveSetupMcpModeArg(["--with-mcp"]), "compat");
+    assert.equal(resolveSetupMcpModeArg(["--mcp", "none"]), "none");
+    assert.equal(resolveSetupMcpModeArg(["--mcp=compat"]), "compat");
+    assert.equal(resolveSetupMcpModeArg(["--scope", "project", "--mcp", "compat"]), "compat");
+  });
+
+  it("rejects invalid or conflicting setup MCP mode flags", () => {
+    assert.throws(
+      () => resolveSetupMcpModeArg(["--mcp"]),
+      /Missing setup MCP mode value after --mcp/,
+    );
+    assert.throws(
+      () => resolveSetupMcpModeArg(["--mcp", "full"]),
+      /Invalid setup MCP mode: full/,
+    );
+    assert.throws(
+      () => resolveSetupMcpModeArg(["--no-mcp", "--with-mcp"]),
+      /Conflicting setup MCP mode flags/,
+    );
+    assert.throws(
+      () => resolveSetupMcpModeArg(["--no-mcp", "--mcp=compat"]),
+      /Conflicting setup MCP mode flags/,
+    );
+  });
+});
+
 describe("resolveSetupScopeArg", () => {
   it("returns undefined when scope is omitted", () => {
     assert.equal(resolveSetupScopeArg(["--dry-run"]), undefined);
@@ -1697,6 +1731,78 @@ describe("project launch scope helpers", () => {
         resolveCodexConfigPathForLaunch(wd, {}),
         join(wd, ".codex", "config.toml"),
       );
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves explicit compat MCP during launch config repair", async () => {
+    const wd = await mkdtemp(join(tmpdir(), "omx-launch-scope-"));
+    try {
+      await mkdir(join(wd, ".omx"), { recursive: true });
+      await mkdir(join(wd, ".codex"), { recursive: true });
+      await writeFile(
+        join(wd, ".omx", "setup-scope.json"),
+        JSON.stringify({ scope: "project", mcpMode: "compat" }),
+      );
+      const configPath = join(wd, ".codex", "config.toml");
+      await mergeConfig(configPath, wd, {
+        includeFirstPartyMcp: true,
+        sharedMcpServers: [
+          {
+            name: "eslint",
+            command: "npx",
+            args: ["@eslint/mcp@latest"],
+            enabled: true,
+            startupTimeoutSec: 12,
+          },
+        ],
+        sharedMcpRegistrySource: join(wd, ".omx", "mcp-registry.json"),
+      });
+      const clean = await readFile(configPath, "utf-8");
+      assert.match(clean, /^\[mcp_servers\.omx_state\]$/m);
+      assert.match(clean, /oh-my-codex \(OMX\) Shared MCP Registry Sync/);
+      assert.match(clean, /^\[mcp_servers\.eslint\]$/m);
+
+      await writeFile(configPath, `${clean}\n[tui]\nstatus_line = ["git-branch"]\n`);
+      const repaired = await repairConfigIfNeeded(
+        configPath,
+        wd,
+        await resolveLaunchConfigRepairOptions(wd, configPath),
+      );
+      const repairedToml = await readFile(configPath, "utf-8");
+
+      assert.equal(repaired, true);
+      assert.match(repairedToml, /^\[mcp_servers\.omx_state\]$/m);
+      assert.match(repairedToml, /oh-my-codex \(OMX\) Shared MCP Registry Sync/);
+      assert.match(repairedToml, /^\[mcp_servers\.eslint\]$/m);
+      assert.equal((repairedToml.match(/^\[tui\]$/gm) ?? []).length, 1);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves existing compat MCP during launch repair without cwd-local preferences", async () => {
+    const wd = await mkdtemp(join(tmpdir(), "omx-launch-scope-"));
+    try {
+      const configPath = join(wd, "global-codex", "config.toml");
+      await mkdir(dirname(configPath), { recursive: true });
+      await mergeConfig(configPath, wd, { includeFirstPartyMcp: true });
+      const clean = await readFile(configPath, "utf-8");
+      assert.equal(existsSync(join(wd, ".omx", "setup-scope.json")), false);
+      assert.match(clean, /^\[mcp_servers\.omx_state\]$/m);
+
+      await writeFile(configPath, `${clean}\n[tui]\nstatus_line = ["git-branch"]\n`);
+      const repaired = await repairConfigIfNeeded(
+        configPath,
+        wd,
+        await resolveLaunchConfigRepairOptions(wd, configPath),
+      );
+      const repairedToml = await readFile(configPath, "utf-8");
+
+      assert.equal(repaired, true);
+      assert.match(repairedToml, /^\[mcp_servers\.omx_state\]$/m);
+      assert.equal((repairedToml.match(/^\[tui\]$/gm) ?? []).length, 1);
     } finally {
       await rm(wd, { recursive: true, force: true });
     }
