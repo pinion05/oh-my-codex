@@ -3760,19 +3760,33 @@ export function buildWindowsPromptCommand(
  * Wrap a command for tmux pane execution while preserving the tmux pane cwd.
  * tmux already starts the pane at `-c <cwd>`; using a login shell here can
  * reset that cwd back to the shell's startup directory on some setups.
- * Source zsh/bash rc files explicitly when needed, then exec the target.
+ *
+ * Do not source user shell rc files by default. In issue #2282 the surviving
+ * OOM signature was thousands of bash processes, not MCP node children;
+ * non-interactive tmux panes sourcing ~/.bashrc can recursively trigger user
+ * automation and fan out before Codex starts. Users who need legacy PATH setup
+ * can opt in with OMX_TMUX_SOURCE_SHELL_RC=1.
  */
+export function shouldSourceTmuxPaneShellRc(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return String(env.OMX_TMUX_SOURCE_SHELL_RC ?? "").trim() === "1";
+}
+
 export function buildTmuxPaneCommand(
   command: string,
   args: string[],
   shellPath: string | undefined = process.env.SHELL,
+  env: NodeJS.ProcessEnv = process.env,
 ): string {
   const bareCmd = buildTmuxShellCommand(command, args);
   let rcSource = "";
-  if (shellPath && /\/zsh$/i.test(shellPath)) {
-    rcSource = "if [ -f ~/.zshrc ]; then source ~/.zshrc; fi; ";
-  } else if (shellPath && /\/bash$/i.test(shellPath)) {
-    rcSource = "if [ -f ~/.bashrc ]; then source ~/.bashrc; fi; ";
+  if (shouldSourceTmuxPaneShellRc(env)) {
+    if (shellPath && /\/zsh$/i.test(shellPath)) {
+      rcSource = "if [ -f ~/.zshrc ]; then source ~/.zshrc; fi; ";
+    } else if (shellPath && /\/bash$/i.test(shellPath)) {
+      rcSource = "if [ -f ~/.bashrc ]; then source ~/.bashrc; fi; ";
+    }
   }
   const rawShell =
     shellPath && shellPath.trim() !== "" ? shellPath.trim() : "/bin/sh";
