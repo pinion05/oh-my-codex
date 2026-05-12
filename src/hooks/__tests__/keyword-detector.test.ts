@@ -85,6 +85,11 @@ describe('keyword detector team compatibility', () => {
     assert.ok(codeReview);
     assert.equal(codeReview.skill, 'code-review');
     assert.equal(codeReview.keyword, '$oh-my-codex:code-review');
+
+    const bestPracticeResearch = detectPrimaryKeyword('$oh-my-codex:best-practice-research find official best practices');
+    assert.ok(bestPracticeResearch);
+    assert.equal(bestPracticeResearch.skill, 'best-practice-research');
+    assert.equal(bestPracticeResearch.keyword, '$oh-my-codex:best-practice-research');
   });
 
   it('does not fall back to implicit keyword detection when an unknown plugin-prefixed $token is present', () => {
@@ -126,6 +131,13 @@ describe('keyword detector team compatibility', () => {
     assert.ok(match);
     assert.equal(match.skill, 'ultragoal');
     assert.equal(match.keyword.toLowerCase(), '$ultragoal');
+  });
+
+  it('maps explicit $best-practice-research invocation to the best-practice research wrapper', () => {
+    const match = detectPrimaryKeyword('$best-practice-research find current official guidance for this API');
+    assert.ok(match);
+    assert.equal(match.skill, 'best-practice-research');
+    assert.equal(match.keyword.toLowerCase(), '$best-practice-research');
   });
 
   it('maps intentful ultragoal prose without triggering artifact path mentions', () => {
@@ -366,6 +378,7 @@ describe('keyword registry coverage', () => {
     assert.ok(registryKeywords.has('investigate'));
     assert.ok(registryKeywords.has('code review'));
     assert.ok(registryKeywords.has('$code-review'));
+    assert.ok(registryKeywords.has('$best-practice-research'));
     assert.ok(registryKeywords.has('coordinated team'));
     assert.ok(registryKeywords.has('ouroboros'));
     assert.ok(registryKeywords.has("don't assume"));

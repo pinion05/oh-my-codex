@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-05-11T07:38:27.080Z",
+  "generatedAt": "2026-05-11T08:31:41.527Z",
   "version": "2026.02.28.1",
   "counts": {
     "skillCount": 47,
@@ -117,6 +117,13 @@
     },
     {
       "name": "deep-interview",
+      "category": "planning",
+      "status": "active",
+      "core": false,
+      "internalRequired": false
+    },
+    {
+      "name": "best-practice-research",
       "category": "planning",
       "status": "active",
       "core": false,

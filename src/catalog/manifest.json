@@ -90,6 +90,12 @@
       "status": "active"
     },
     {
+      "name": "best-practice-research",
+      "category": "planning",
+      "status": "active",
+      "core": false
+    },
+    {
       "name": "analyze",
       "category": "shortcut",
       "status": "active"
