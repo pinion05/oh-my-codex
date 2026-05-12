@@ -1,4 +1,4 @@
-# oh-my-codex v0.17.0
+# Release notes — 0.17.0
 
 `0.17.0` is a minor release after `0.16.4` because the shipped delta adds new product surfaces: the bounded Hermes MCP bridge, the canonical `$design` workflow, plugin-mode skill marketplace exposure, and stronger UltraQA adversarial testing guidance. It also hardens Windows native hooks, tmux ownership, startup shell isolation, committed project memory loading, and Ultragoal completion reconciliation.
 
@@ -32,11 +32,7 @@
 
 ## Validation
 
-Local release-review gates include build, lint, no-unused typecheck, targeted MCP/Hermes state-path suites, release-focused Node suites, cargo test, release body generation, npm pack dry-run, and git diff whitespace checks. CI/publication evidence is tracked in `docs/qa/release-readiness-0.17.0.md`.
-
-## Contributors
-
-Thanks to @Yeachan-Heo and the contributors behind PRs #2267, #2268, #2270, #2272, #2274, #2276, #2283, and #2293 for the fixes and workflow hardening in this train.
+Release readiness evidence is recorded in `docs/qa/release-readiness-0.17.0.md`.
 
 ## Why this is a minor release
 

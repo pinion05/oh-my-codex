@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { injectExecFollowup } from "../exec/followup.js";
 import { isSessionStateUsable, readUsableSessionState, type SessionState } from "../hooks/session.js";
@@ -76,6 +76,7 @@ const SAFE_ARTIFACT_PREFIXES = [
 const DEFAULT_ARTIFACT_MAX_BYTES = 128_000;
 const DEFAULT_TAIL_LINES = 80;
 const MAX_TAIL_LINES = 500;
+const MAX_TAIL_READ_BYTES = 256_000;
 
 function jsonResult<T extends Record<string, unknown>>(data: T): HermesBridgeResult<T> {
   return { ok: true, data };
@@ -343,17 +344,21 @@ async function resolveSafeArtifactPath(cwd: string, rel: string): Promise<string
 
 async function collectFiles(root: string, cwd: string, limit: number, out: Array<{ path: string; bytes: number }>): Promise<void> {
   if (out.length >= limit || !existsSync(root)) return;
-  const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
+  const cwdRealPath = await realpath(cwd);
+  const rootRealPath = await realpath(root).catch(() => null);
+  if (!rootRealPath || !isInsideDirectory(cwdRealPath, rootRealPath)) return;
+  const entries = await readdir(rootRealPath, { withFileTypes: true }).catch(() => []);
   for (const entry of entries) {
     if (out.length >= limit) return;
-    const full = join(root, entry.name);
+    const full = join(rootRealPath, entry.name);
+    const logicalFull = join(root, entry.name);
     if (entry.isDirectory()) {
-      await collectFiles(full, cwd, limit, out);
+      await collectFiles(logicalFull, cwd, limit, out);
     } else if (entry.isFile()) {
-      const rel = relative(cwd, full).replace(/\\/g, "/");
+      const rel = relative(cwd, logicalFull).replace(/\\/g, "/");
       try {
-        const content = await readFile(full);
-        out.push({ path: rel, bytes: content.byteLength });
+        const info = await stat(full);
+        out.push({ path: rel, bytes: info.size });
       } catch {
         // Ignore unreadable artifacts.
       }
@@ -385,9 +390,15 @@ export async function hermesReadArtifact(
     const rel = normalizeArtifactRelativePath(args.path);
     const full = await resolveSafeArtifactPath(cwd, rel);
     const maxBytes = normalizePositiveInteger(args.max_bytes, DEFAULT_ARTIFACT_MAX_BYTES, 1_000_000);
-    const raw = await readFile(full);
-    const truncated = raw.byteLength > maxBytes;
-    return jsonResult({ path: rel, content: raw.subarray(0, maxBytes).toString("utf-8"), truncated });
+    const handle = await open(full, "r");
+    try {
+      const buffer = Buffer.alloc(maxBytes + 1);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      const truncated = bytesRead > maxBytes;
+      return jsonResult({ path: rel, content: buffer.subarray(0, Math.min(bytesRead, maxBytes)).toString("utf-8"), truncated });
+    } finally {
+      await handle.close();
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message === "artifact_missing") return failure("artifact_missing", message);
@@ -406,8 +417,24 @@ export async function hermesReadTail(
     const lines = normalizePositiveInteger(args.lines, DEFAULT_TAIL_LINES, MAX_TAIL_LINES);
     const path = join(cwd, ".omx", "logs", "session-history.jsonl");
     if (!existsSync(path)) return jsonResult({ tail: [], path });
-    const content = await readFile(path, "utf-8");
-    return jsonResult({ tail: content.split(/\r?\n/).filter(Boolean).slice(-lines), path });
+    const cwdRealPath = await realpath(cwd);
+    const pathRealPath = await realpath(path);
+    if (!isInsideDirectory(cwdRealPath, pathRealPath)) {
+      throw new Error("session history resolved outside working directory");
+    }
+    const info = await stat(path);
+    const readBytes = Math.min(info.size, MAX_TAIL_READ_BYTES);
+    const start = Math.max(0, info.size - readBytes);
+    const handle = await open(pathRealPath, "r");
+    try {
+      const buffer = Buffer.alloc(readBytes);
+      const { bytesRead } = await handle.read(buffer, 0, readBytes, start);
+      const prefix = start > 0 ? "\n" : "";
+      const content = `${prefix}${buffer.subarray(0, bytesRead).toString("utf-8")}`;
+      return jsonResult({ tail: content.split(/\r?\n/).filter(Boolean).slice(-lines), path });
+    } finally {
+      await handle.close();
+    }
   } catch (error) {
     return failure("invalid_input", error instanceof Error ? error.message : String(error));
   }
