@@ -4,6 +4,37 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-05-12
+
+Minor release focused on new coordination and workflow surfaces: bounded Hermes MCP coordination, canonical `$design` workflow guidance, plugin-mode skill marketplace exposure, adversarial UltraQA contracts, Windows native-hook reliability, tmux ownership safety, startup shell isolation, committed project-memory loading, and Ultragoal task-scoped goal reconciliation.
+
+### Added
+
+- **Hermes MCP bridge** — bounded tools for session/status reads, audited follow-up dispatch, safe artifact reads, log tails, session starts, and coordination reports without exposing tmux scrollback or raw private state.
+- **Canonical design workflow** — `DESIGN.md` and mirrored `$design` skill guidance now define the design workflow; `frontend-ui-ux` is deprecated.
+- **Plugin-mode skill discovery** — setup registers and verifies the local Codex plugin marketplace/cache and plugin-scoped MCP metadata, including Hermes.
+
+### Changed
+
+- **UltraQA is adversarial by contract** — guidance now requires hostile scenario modeling, prompt injection attempts, interrupts/cancel/resume, stale state checks, temporary harnesses when useful, and cleanup evidence.
+- **CLI-first runtime authority is clearer** — docs and guidance distinguish CLI-owned runtime behavior from MCP/default setup paths.
+
+### Fixed
+
+- **Windows native hook launch** — PowerShell `ProcessStartInfo` shim preserves stdin/stdout/stderr and exit status across spaces and quoting-sensitive paths.
+- **Tmux continuation ownership** — follow-up injection verifies mode/session/window ownership before sending prompts to panes.
+- **Startup shell isolation** — tmux launches avoid shell rc fan-out before Codex starts.
+- **Ultragoal completion reconciliation** — completed task-scoped aggregate Codex goals can be reconciled to the active OMX story with strict evidence and final quality gates.
+- **Release-review test isolation** — MCP/Hermes state-path tests isolate inherited OMX runtime environment and canonicalize macOS temp roots so symlink-root security checks remain reproducible.
+
+### PRs
+
+- #2267, #2268, #2270, #2272, #2274, #2276, #2283, #2293
+
+### Verification
+
+- Release readiness evidence is tracked in `docs/qa/release-readiness-0.17.0.md`.
+
 ## [0.16.4] - 2026-05-11
 
 Patch release focused on post-`0.16.3` workflow reliability: approved execution handoff integrity, context-pack metadata visibility, Codex hook feature-flag migration, setup/notify ownership safety, HUD/runtime state-root visibility, Ralph completion audit evidence, and Ultragoal completion proof requirements.

@@ -1,6 +1,6 @@
-import { describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve as resolvePath } from 'path';
@@ -20,6 +20,36 @@ import {
   validateStateModeSegment,
   validateSessionId,
 } from '../state-paths.js';
+
+
+const isolatedEnvKeys = [
+  'OMX_MCP_WORKDIR_ROOTS',
+  'OMX_ROOT',
+  'OMX_STATE_ROOT',
+  'OMX_TEAM_STATE_ROOT',
+  'OMX_SESSION_ID',
+  'CODEX_SESSION_ID',
+  'SESSION_ID',
+] as const;
+const originalEnv = Object.fromEntries(
+  isolatedEnvKeys.map((key) => [key, process.env[key]]),
+) as Record<(typeof isolatedEnvKeys)[number], string | undefined>;
+
+beforeEach(() => {
+  for (const key of isolatedEnvKeys) delete process.env[key];
+});
+
+afterEach(() => {
+  for (const key of isolatedEnvKeys) {
+    const value = originalEnv[key];
+    if (typeof value === 'string') process.env[key] = value;
+    else delete process.env[key];
+  }
+});
+
+async function mkRealTemp(prefix: string): Promise<string> {
+  return await realpath(await mkdtemp(join(await realpath(tmpdir()), prefix)));
+}
 
 describe('validateSessionId', () => {
   it('accepts undefined and valid ids', () => {
@@ -131,8 +161,8 @@ describe('state paths', () => {
   });
 
   it('enforces OMX_MCP_WORKDIR_ROOTS allowlist when configured', async () => {
-    const allowedRoot = await mkdtemp(join(tmpdir(), 'omx-allowed-root-'));
-    const disallowedRoot = await mkdtemp(join(tmpdir(), 'omx-disallowed-root-'));
+    const allowedRoot = await mkRealTemp('omx-allowed-root-');
+    const disallowedRoot = await mkRealTemp('omx-disallowed-root-');
     const prev = process.env.OMX_MCP_WORKDIR_ROOTS;
     process.env.OMX_MCP_WORKDIR_ROOTS = allowedRoot;
     try {
@@ -153,8 +183,8 @@ describe('state paths', () => {
   });
 
   it('preserves symlinked workingDirectory spelling when no allowlist is configured', async () => {
-    const realRoot = await mkdtemp(join(tmpdir(), 'omx-real-root-'));
-    const linkParent = await mkdtemp(join(tmpdir(), 'omx-link-parent-'));
+    const realRoot = await mkRealTemp('omx-real-root-');
+    const linkParent = await mkRealTemp('omx-link-parent-');
     const link = join(linkParent, 'workspace-link');
     const prev = process.env.OMX_MCP_WORKDIR_ROOTS;
     delete process.env.OMX_MCP_WORKDIR_ROOTS;
@@ -171,8 +201,8 @@ describe('state paths', () => {
   });
 
   it('rejects symlinked workingDirectory candidates that escape OMX_MCP_WORKDIR_ROOTS', async () => {
-    const allowedRoot = await mkdtemp(join(tmpdir(), 'omx-allowed-root-'));
-    const outsideRoot = await mkdtemp(join(tmpdir(), 'omx-outside-root-'));
+    const allowedRoot = await mkRealTemp('omx-allowed-root-');
+    const outsideRoot = await mkRealTemp('omx-outside-root-');
     const prev = process.env.OMX_MCP_WORKDIR_ROOTS;
     process.env.OMX_MCP_WORKDIR_ROOTS = allowedRoot;
     try {
@@ -192,8 +222,8 @@ describe('state paths', () => {
   });
 
   it('rejects symlinked OMX_MCP_WORKDIR_ROOTS entries instead of treating their targets as allowed roots', async () => {
-    const intendedRoot = await mkdtemp(join(tmpdir(), 'omx-intended-root-'));
-    const outsideRoot = await mkdtemp(join(tmpdir(), 'omx-outside-root-'));
+    const intendedRoot = await mkRealTemp('omx-intended-root-');
+    const outsideRoot = await mkRealTemp('omx-outside-root-');
     const prev = process.env.OMX_MCP_WORKDIR_ROOTS;
     const symlinkedRoot = join(intendedRoot, 'allowed-link');
     process.env.OMX_MCP_WORKDIR_ROOTS = symlinkedRoot;
@@ -236,7 +266,7 @@ describe('state paths', () => {
   });
 
   it('enumerates global-only path', async () => {
-    const wd = await mkdtemp(join(tmpdir(), 'omx-state-paths-'));
+    const wd = await mkRealTemp('omx-state-paths-');
     try {
       const paths = await getAllScopedStatePaths('team', wd);
       assert.deepEqual(paths, [getStatePath('team', wd)]);
@@ -246,7 +276,7 @@ describe('state paths', () => {
   });
 
   it('enumerates session-scoped paths', async () => {
-    const wd = await mkdtemp(join(tmpdir(), 'omx-state-paths-'));
+    const wd = await mkRealTemp('omx-state-paths-');
     try {
       const sessionsRoot = join(getBaseStateDir(wd), 'sessions');
       await mkdir(join(sessionsRoot, 'sess1'), { recursive: true });
@@ -263,7 +293,7 @@ describe('state paths', () => {
   });
 
   it('enumerates state directories across all scopes', async () => {
-    const wd = await mkdtemp(join(tmpdir(), 'omx-state-paths-'));
+    const wd = await mkRealTemp('omx-state-paths-');
     try {
       const sessionsRoot = join(getBaseStateDir(wd), 'sessions');
       await mkdir(join(sessionsRoot, 'sess1'), { recursive: true });
@@ -280,7 +310,7 @@ describe('state paths', () => {
   });
 
   it('enumerates global and session-scoped paths together', async () => {
-    const wd = await mkdtemp(join(tmpdir(), 'omx-state-paths-'));
+    const wd = await mkRealTemp('omx-state-paths-');
     try {
       const sessionsRoot = join(getBaseStateDir(wd), 'sessions');
       await mkdir(join(sessionsRoot, 'sess1'), { recursive: true });
@@ -298,7 +328,7 @@ describe('state paths', () => {
   });
 
   it('ignores invalid session directory names', async () => {
-    const wd = await mkdtemp(join(tmpdir(), 'omx-state-paths-'));
+    const wd = await mkRealTemp('omx-state-paths-');
     try {
       const sessionsRoot = join(getBaseStateDir(wd), 'sessions');
       await mkdir(join(sessionsRoot, 'valid-session'), { recursive: true });
@@ -313,7 +343,7 @@ describe('state paths', () => {
   });
 
   it('reads session-sensitive runtime files from the current session without root fallback when requested', async () => {
-    const wd = await mkdtemp(join(tmpdir(), 'omx-state-paths-'));
+    const wd = await mkRealTemp('omx-state-paths-');
     try {
       const stateDir = getBaseStateDir(wd);
       await mkdir(join(stateDir, 'sessions', 'sess-current'), { recursive: true });
@@ -330,7 +360,7 @@ describe('state paths', () => {
   });
 
   it('prefers OMX_SESSION_ID over stale session.json when resolving current session id', async () => {
-    const wd = await mkdtemp(join(tmpdir(), 'omx-state-paths-'));
+    const wd = await mkRealTemp('omx-state-paths-');
     const previousSessionId = process.env.OMX_SESSION_ID;
     try {
       const stateDir = getBaseStateDir(wd);
@@ -351,7 +381,7 @@ describe('state paths', () => {
   });
 
   it('resolves current session from authoritative team state root without OMX_SESSION_ID', async () => {
-    const wd = await mkdtemp(join(tmpdir(), 'omx-state-paths-team-root-session-'));
+    const wd = await mkRealTemp('omx-state-paths-team-root-session-');
     const teamStateRoot = join(wd, 'team-state-root');
     const previousTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
     const previousSessionId = process.env.OMX_SESSION_ID;
@@ -380,7 +410,7 @@ describe('state paths', () => {
   });
 
   it('does not resolve current session from source root when a team state root is authoritative', async () => {
-    const wd = await mkdtemp(join(tmpdir(), 'omx-state-paths-ignore-source-session-'));
+    const wd = await mkRealTemp('omx-state-paths-ignore-source-session-');
     const teamStateRoot = join(wd, 'team-state-root');
     const previousTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
     const previousSessionId = process.env.OMX_SESSION_ID;

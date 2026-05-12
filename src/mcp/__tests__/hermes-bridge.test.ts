@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import {
   hermesListArtifacts,
   hermesListSessions,
@@ -18,6 +18,19 @@ const originalRoots = process.env.OMX_MCP_WORKDIR_ROOTS;
 const originalOmxRoot = process.env.OMX_ROOT;
 const originalOmxStateRoot = process.env.OMX_STATE_ROOT;
 const originalTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+const originalSessionId = process.env.OMX_SESSION_ID;
+const originalCodexSessionId = process.env.CODEX_SESSION_ID;
+const originalGenericSessionId = process.env.SESSION_ID;
+
+beforeEach(() => {
+  delete process.env.OMX_MCP_WORKDIR_ROOTS;
+  delete process.env.OMX_ROOT;
+  delete process.env.OMX_STATE_ROOT;
+  delete process.env.OMX_TEAM_STATE_ROOT;
+  delete process.env.OMX_SESSION_ID;
+  delete process.env.CODEX_SESSION_ID;
+  delete process.env.SESSION_ID;
+});
 
 afterEach(() => {
   if (typeof originalRoots === "string") process.env.OMX_MCP_WORKDIR_ROOTS = originalRoots;
@@ -28,13 +41,19 @@ afterEach(() => {
   else delete process.env.OMX_STATE_ROOT;
   if (typeof originalTeamStateRoot === "string") process.env.OMX_TEAM_STATE_ROOT = originalTeamStateRoot;
   else delete process.env.OMX_TEAM_STATE_ROOT;
+  if (typeof originalSessionId === "string") process.env.OMX_SESSION_ID = originalSessionId;
+  else delete process.env.OMX_SESSION_ID;
+  if (typeof originalCodexSessionId === "string") process.env.CODEX_SESSION_ID = originalCodexSessionId;
+  else delete process.env.CODEX_SESSION_ID;
+  if (typeof originalGenericSessionId === "string") process.env.SESSION_ID = originalGenericSessionId;
+  else delete process.env.SESSION_ID;
 });
 
 async function tempWorkspace(name: string): Promise<string> {
   delete process.env.OMX_ROOT;
   delete process.env.OMX_STATE_ROOT;
   delete process.env.OMX_TEAM_STATE_ROOT;
-  return await mkdtemp(join(tmpdir(), name));
+  return await realpath(await mkdtemp(join(await realpath(tmpdir()), name)));
 }
 
 describe("Hermes MCP bridge core", () => {
@@ -235,6 +254,83 @@ describe("Hermes MCP bridge core", () => {
       assert.equal(traversal.code, "artifact_outside_safe_roots");
     } finally {
       await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+
+  it("reads large artifacts with max_bytes truncation and reports stat sizes", async () => {
+    const cwd = await tempWorkspace("omx-hermes-large-artifact-");
+    try {
+      await mkdir(join(cwd, ".omx", "plans"), { recursive: true });
+      const content = `${"a".repeat(1024 * 1024)}tail`;
+      await writeFile(join(cwd, ".omx", "plans", "large.md"), content);
+
+      const list = await hermesListArtifacts({ workingDirectory: cwd });
+      assert.equal(list.ok, true);
+      assert.deepEqual(list.data?.artifacts, [{ path: ".omx/plans/large.md", bytes: content.length }]);
+
+      const read = await hermesReadArtifact({ workingDirectory: cwd, path: ".omx/plans/large.md", max_bytes: 8 });
+      assert.equal(read.ok, true);
+      assert.deepEqual(read.data, { path: ".omx/plans/large.md", content: "aaaaaaaa", truncated: true });
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("reads session-history tails from a bounded suffix", async () => {
+    const cwd = await tempWorkspace("omx-hermes-large-tail-");
+    try {
+      await mkdir(join(cwd, ".omx", "logs"), { recursive: true });
+      await writeFile(
+        join(cwd, ".omx", "logs", "session-history.jsonl"),
+        `${"ignored\n".repeat(40_000)}one\ntwo\nthree\n`,
+      );
+
+      const result = await hermesReadTail({ workingDirectory: cwd, lines: 2 });
+
+      assert.equal(result.ok, true);
+      assert.deepEqual(result.data?.tail, ["two", "three"]);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("does not list artifacts from safe-root directories symlinked outside the worktree", async () => {
+    const cwd = await tempWorkspace("omx-hermes-list-root-symlink-");
+    const outside = await tempWorkspace("omx-hermes-list-root-outside-");
+    try {
+      await mkdir(join(cwd, ".omx"), { recursive: true });
+      await mkdir(outside, { recursive: true });
+      await writeFile(join(outside, "secret.md"), "outside artifact");
+      await symlink(outside, join(cwd, ".omx", "plans"));
+
+      const result = await hermesListArtifacts({ workingDirectory: cwd });
+
+      assert.equal(result.ok, true);
+      assert.deepEqual(result.data?.artifacts, []);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects session-history tails symlinked outside the worktree", async () => {
+    const cwd = await tempWorkspace("omx-hermes-tail-symlink-");
+    const outside = await tempWorkspace("omx-hermes-tail-outside-");
+    try {
+      await mkdir(join(cwd, ".omx", "logs"), { recursive: true });
+      const outsideLog = join(outside, "session-history.jsonl");
+      await writeFile(outsideLog, "secret\n");
+      await symlink(outsideLog, join(cwd, ".omx", "logs", "session-history.jsonl"));
+
+      const result = await hermesReadTail({ workingDirectory: cwd, lines: 1 });
+
+      assert.equal(result.ok, false);
+      assert.equal(result.code, "invalid_input");
+      assert.match(result.error ?? "", /outside working directory/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
     }
   });
 
