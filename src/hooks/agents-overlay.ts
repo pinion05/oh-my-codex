@@ -671,7 +671,8 @@ export async function writeSessionModelInstructionsFile(
   await mkdir(dirname(sessionPath), { recursive: true });
 
   const baseParts: string[] = [];
-  const sourcePaths = [join(codexHome(), "AGENTS.md"), join(cwd, "AGENTS.md")];
+  const userAgentsPath = join(codexHome(), "AGENTS.md");
+  const sourcePaths = [userAgentsPath, join(cwd, "AGENTS.md")];
   const seenPaths = new Set<string>();
   const installedSkills = await listInstalledSkillDirectories(cwd);
   const projectSkillNames = new Set(
@@ -686,12 +687,13 @@ export async function writeSessionModelInstructionsFile(
 
     let content = await readFile(sourcePath, "utf-8");
     content = stripOverlayContent(content).trim();
-    content = stripGeneratedOmxAgentsForSession(content);
-    if (sourcePath === join(codexHome(), "AGENTS.md")) {
+    if (sourcePath === userAgentsPath) {
       content = dropShadowedSkillReferenceLines(
         content,
         projectSkillNames,
       ).trim();
+    } else {
+      content = stripGeneratedOmxAgentsForSession(content);
     }
     if (!content) continue;
     baseParts.push(content);

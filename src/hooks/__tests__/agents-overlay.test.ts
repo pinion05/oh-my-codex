@@ -829,6 +829,48 @@ describe("session-scoped model instructions file", () => {
     assert.match(sessionContent, /<!-- OMX:RUNTIME:START -->/);
   });
 
+  it("preserves generated user AGENTS while omitting pure generated project AGENTS", async () => {
+    await mkdir(join(tempDir, "home", ".codex"), { recursive: true });
+    await writeFile(
+      join(tempDir, "home", ".codex", "AGENTS.md"),
+      [
+        "<!-- AUTONOMY DIRECTIVE — DO NOT REMOVE -->",
+        "YOU ARE AN AUTONOMOUS CODING AGENT.",
+        "<!-- END AUTONOMY DIRECTIVE -->",
+        OMX_GENERATED_AGENTS_MARKER,
+        "",
+        "# oh-my-codex - Intelligent Multi-Agent Orchestration",
+        "",
+        "User profile OMX brain.",
+      ].join("\n"),
+    );
+    await writeFile(
+      join(tempDir, "AGENTS.md"),
+      [
+        "<!-- AUTONOMY DIRECTIVE — DO NOT REMOVE -->",
+        "YOU ARE AN AUTONOMOUS CODING AGENT.",
+        "<!-- END AUTONOMY DIRECTIVE -->",
+        OMX_GENERATED_AGENTS_MARKER,
+        "",
+        "# oh-my-codex - Intelligent Multi-Agent Orchestration",
+        "",
+        "Project generated OMX boilerplate.",
+      ].join("\n"),
+    );
+
+    const overlay = await generateOverlay(tempDir, "session-user-generated");
+    const writtenPath = await writeSessionModelInstructionsFile(
+      tempDir,
+      "session-user-generated",
+      overlay,
+    );
+    const sessionContent = await readFile(writtenPath, "utf-8");
+
+    assert.match(sessionContent, /User profile OMX brain\./);
+    assert.doesNotMatch(sessionContent, /Project generated OMX boilerplate\./);
+    assert.match(sessionContent, /<!-- OMX:RUNTIME:START -->/);
+  });
+
   it("preserves real unmarked project AGENTS guidance distinct from generated session AGENTS", async () => {
     await mkdir(join(tempDir, "home", ".codex"), { recursive: true });
     await rm(join(tempDir, "home", ".codex", "AGENTS.md"), { force: true });
