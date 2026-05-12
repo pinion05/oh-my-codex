@@ -163,7 +163,7 @@ export function readMatchedApprovedRalphExecutionHint(
   );
 }
 
-export function buildRalphApprovedContextLines(approvedHint: ApprovedExecutionLaunchHint | null): string[] {
+function buildRalphApprovedContextLines(approvedHint: ApprovedExecutionLaunchHint | null): string[] {
   if (!approvedHint) return [];
   const lines = [
     'Approved planning handoff context:',

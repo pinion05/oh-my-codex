@@ -27,12 +27,6 @@
       "core": true
     },
     {
-      "name": "runingteam",
-      "category": "execution",
-      "status": "active",
-      "core": false
-    },
-    {
       "name": "ecomode",
       "category": "execution",
       "status": "deprecated",
