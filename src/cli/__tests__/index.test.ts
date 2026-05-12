@@ -11,6 +11,7 @@ import {
   normalizeCodexLaunchArgs,
   buildTmuxShellCommand,
   buildTmuxPaneCommand,
+  shouldSourceTmuxPaneShellRc,
   buildWindowsPromptCommand,
   buildTmuxSessionName,
   resolveCliInvocation,
@@ -3770,18 +3771,19 @@ describe("buildTmuxShellCommand", () => {
 });
 
 describe("buildTmuxPaneCommand", () => {
-  it("wraps command with zsh profile sourcing while preserving tmux cwd", () => {
+  it("wraps command with zsh without sourcing rc files by default", () => {
     const result = buildTmuxPaneCommand(
       "codex",
       ["--model", "gpt-5"],
       "/usr/bin/zsh",
+      {},
     );
     assert.ok(
       result.startsWith("'/usr/bin/zsh' -c "),
       "should start with zsh non-login shell to preserve tmux cwd",
     );
     assert.ok(!result.includes(" -lc "), "should not use a login shell");
-    assert.ok(result.includes("source ~/.zshrc"), "should source .zshrc");
+    assert.ok(!result.includes("source ~/.zshrc"), "should not source .zshrc by default");
     assert.ok(result.includes("exec "), "should exec the command");
   });
 
@@ -3790,6 +3792,7 @@ describe("buildTmuxPaneCommand", () => {
       "codex",
       ["--model", "gpt-5"],
       "/opt/homebrew/bin/zsh",
+      {},
     );
     assert.ok(
       result.startsWith("'/opt/homebrew/bin/zsh' -c "),
@@ -3799,7 +3802,7 @@ describe("buildTmuxPaneCommand", () => {
       !result.startsWith("'/bin/sh' -c "),
       "should not fall back to /bin/sh for supported Homebrew zsh",
     );
-    assert.ok(result.includes("source ~/.zshrc"), "should source .zshrc");
+    assert.ok(!result.includes("source ~/.zshrc"), "should not source .zshrc by default");
   });
 
   it("keeps MacPorts zsh instead of downgrading to /bin/sh", () => {
@@ -3807,6 +3810,7 @@ describe("buildTmuxPaneCommand", () => {
       "codex",
       ["--model", "gpt-5"],
       "/opt/local/bin/zsh",
+      {},
     );
     assert.ok(
       result.startsWith("'/opt/local/bin/zsh' -c "),
@@ -3816,18 +3820,31 @@ describe("buildTmuxPaneCommand", () => {
       !result.startsWith("'/bin/sh' -c "),
       "should not fall back to /bin/sh for supported MacPorts zsh",
     );
-    assert.ok(result.includes("source ~/.zshrc"), "should source .zshrc");
+    assert.ok(!result.includes("source ~/.zshrc"), "should not source .zshrc by default");
   });
 
-  it("wraps command with bash profile sourcing while preserving tmux cwd", () => {
-    const result = buildTmuxPaneCommand("codex", [], "/bin/bash");
+  it("prevents issue #2282 bash rc fan-out by default", () => {
+    const result = buildTmuxPaneCommand("codex", [], "/bin/bash", {});
     assert.ok(
       result.startsWith("'/bin/bash' -c "),
       "should start with bash non-login shell to preserve tmux cwd",
     );
     assert.ok(!result.includes(" -lc "), "should not use a login shell");
-    assert.ok(result.includes("source ~/.bashrc"), "should source .bashrc");
+    assert.ok(!result.includes("source ~/.bashrc"), "should not source .bashrc by default");
     assert.ok(result.includes("exec "), "should exec the command");
+  });
+
+  it("sources zsh and bash rc files only when explicitly opted in", () => {
+    assert.equal(shouldSourceTmuxPaneShellRc({}), false);
+    assert.equal(shouldSourceTmuxPaneShellRc({ OMX_TMUX_SOURCE_SHELL_RC: "1" }), true);
+    assert.ok(
+      buildTmuxPaneCommand("codex", [], "/usr/bin/zsh", { OMX_TMUX_SOURCE_SHELL_RC: "1" }).includes("source ~/.zshrc"),
+      "opt-in zsh launches may source .zshrc",
+    );
+    assert.ok(
+      buildTmuxPaneCommand("codex", [], "/bin/bash", { OMX_TMUX_SOURCE_SHELL_RC: "1" }).includes("source ~/.bashrc"),
+      "opt-in bash launches may source .bashrc",
+    );
   });
 
   it("skips rc sourcing for unknown shells without using a login shell", () => {
