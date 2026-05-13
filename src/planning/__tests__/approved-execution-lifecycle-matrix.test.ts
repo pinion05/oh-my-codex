@@ -12,6 +12,7 @@ import {
 import {
   buildApprovedTeamExecutionBinding,
   buildApprovedTeamHandoffSection,
+  buildUltragoalCheckpointGuidance,
 } from '../../team/approved-execution.js';
 import { buildRalphAppendInstructions } from '../../cli/ralph.js';
 import { createTeamExecStage } from '../../pipeline/stages/team-exec.js';
@@ -118,6 +119,53 @@ describe('approved execution lifecycle baseline matrix', () => {
       task: fixture.teamTask,
       command: `omx team 2:executor "${fixture.teamTask}"`,
     });
+  });
+
+  it('adds leader-owned Ultragoal checkpoint context to approved Team handoffs without breaking launch hint selection', async () => {
+    const plansDir = join(tempDir, '.omx', 'plans');
+    await mkdir(plansDir, { recursive: true });
+    const prdPath = join(plansDir, 'prd-ultragoal-team.md');
+    const testSpecPath = join(plansDir, 'test-spec-ultragoal-team.md');
+    const teamTask = 'Use Team + Ultragoal together for G001-team-runtime-bridge';
+    await writeFile(
+      prdPath,
+      [
+        '# Ultragoal Team bridge',
+        '',
+        'Active ultragoal story: G001-team-runtime-bridge in .omx/ultragoal/goals.json.',
+        'Team returns evidence for .omx/ultragoal/ledger.jsonl; the leader checkpoints with a fresh get_goal snapshot.',
+        '',
+        `Launch via omx team 3:executor "${teamTask}"`,
+        'Use Ralph only for a later sequential single-owner verification/fix loop.',
+      ].join('\n'),
+    );
+    await writeFile(testSpecPath, '# Ultragoal Team bridge test spec\n');
+
+    const teamOutcome = readApprovedExecutionLaunchHintOutcome(tempDir, 'team', {
+      prdPath,
+      task: teamTask,
+    });
+    assert.equal(teamOutcome.status, 'resolved');
+    if (teamOutcome.status !== 'resolved') throw new Error('expected ultragoal team hint');
+
+    const guidance = buildUltragoalCheckpointGuidance(teamOutcome.hint);
+    assert.equal(guidance?.goal_id, 'G001-team-runtime-bridge');
+    assert.equal(guidance?.checkpoint_policy, 'fresh_leader_get_goal_required');
+    assert.match(guidance?.checkpoint_command_template ?? '', /verified \.omx\/ultragoal\/goals\.json context/);
+
+    const section = buildApprovedTeamHandoffSection(teamOutcome.hint) ?? '';
+    assert.match(section, /Approved-plan Ultragoal hint/);
+    assert.match(section, /\.omx\/ultragoal\/goals\.json/);
+    assert.match(section, /\.omx\/ultragoal\/ledger\.jsonl/);
+    assert.match(section, /Team workers provide task\/evidence updates only/i);
+    assert.match(section, /No checkpoint command is emitted from approved-plan hints/i);
+    assert.doesNotMatch(section, /omx ultragoal checkpoint --goal-id/i);
+    assert.doesNotMatch(section, /auto[- ]launch.*team/i);
+
+    const ralphOutcome = readApprovedExecutionLaunchHintOutcome(tempDir, 'ralph', {
+      prdPath,
+    });
+    assert.equal(ralphOutcome.status, 'absent');
   });
 
   it('keeps same-task team selector outcomes fail-closed when launch hints are ambiguous', async () => {
