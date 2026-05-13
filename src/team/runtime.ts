@@ -142,6 +142,12 @@ import {
   type ApprovedTeamExecutionBinding,
 } from './approved-execution.js';
 import {
+  readPersistedTeamUltragoalContext,
+  renderLeaderOwnedUltragoalContextSection,
+  resolveLeaderOwnedUltragoalContext,
+  writePersistedTeamUltragoalContext,
+} from './ultragoal-context.js';
+import {
   appendTeamCommitHygieneEntries,
   buildTeamCommitHygieneContext,
   resolveTeamCommitHygieneArtifactCwd,
@@ -165,6 +171,11 @@ import {
   findLaunchSafeCleanupCandidates,
   type CleanupResult,
 } from '../cli/cleanup.js';
+
+function joinContextSections(...sections: Array<string | undefined>): string | undefined {
+  const present = sections.filter((section): section is string => Boolean(section?.trim()));
+  return present.length > 0 ? present.join('\n\n') : undefined;
+}
 
 /** Snapshot of the team state at a point in time */
 export interface TeamSnapshot {
@@ -2365,7 +2376,11 @@ export async function startTeam(
   const approvedExecution = selectedApprovedExecutionHint
     ? buildApprovedTeamExecutionBinding(selectedApprovedExecutionHint)
     : null;
-  const approvedContextSection = buildApprovedTeamHandoffSection(selectedApprovedExecutionHint);
+  const ultragoalContext = await resolveLeaderOwnedUltragoalContext(leaderCwd);
+  const approvedContextSection = joinContextSections(
+    buildApprovedTeamHandoffSection(selectedApprovedExecutionHint),
+    renderLeaderOwnedUltragoalContextSection(ultragoalContext),
+  );
   const activeWorktreeMode: 'detached' | 'named' | null =
     effectiveWorktreeMode.enabled
       ? (effectiveWorktreeMode.detached ? 'detached' : 'named')
@@ -2477,6 +2492,12 @@ export async function startTeam(
       sanitized,
       leaderCwd,
       approvedExecution,
+      teamStateRoot,
+    );
+    await writePersistedTeamUltragoalContext(
+      sanitized,
+      leaderCwd,
+      ultragoalContext,
       teamStateRoot,
     );
 
@@ -3384,9 +3405,17 @@ export async function assignTask(
       config.leader_cwd ?? cwd,
       config.team_state_root ?? resolveCanonicalTeamStateRoot(config.leader_cwd ?? cwd),
     );
-    const approvedContextSection = approvedExecutionState.status === 'valid'
-      ? buildApprovedTeamHandoffSection(approvedExecutionState.approvedHint)
-      : undefined;
+    const persistedUltragoalContext = await readPersistedTeamUltragoalContext(
+      sanitized,
+      config.leader_cwd ?? cwd,
+      config.team_state_root ?? resolveCanonicalTeamStateRoot(config.leader_cwd ?? cwd),
+    );
+    const approvedContextSection = joinContextSections(
+      approvedExecutionState.status === 'valid'
+        ? buildApprovedTeamHandoffSection(approvedExecutionState.approvedHint)
+        : undefined,
+      renderLeaderOwnedUltragoalContextSection(persistedUltragoalContext),
+    );
     const taskForInbox = task.delegation
       ? task
       : (await updateTask(sanitized, taskId, { delegation: synthesizeDelegationPlan(task) }, cwd)) ?? task;
