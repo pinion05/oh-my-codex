@@ -648,7 +648,7 @@ describe("omx setup refresh summary and dry-run behavior", () => {
     }
   });
 
-  it("repairs retired omx_team_run config during setup refresh", async () => {
+  it("warns and preserves retired omx_team_run config until interactive removal is confirmed", async () => {
     const wd = await mkdtemp(join(tmpdir(), "omx-setup-refresh-"));
     try {
       await mkdir(join(wd, ".omx", "state"), { recursive: true });
@@ -668,9 +668,9 @@ describe("omx setup refresh summary and dry-run behavior", () => {
       const config = await readFile(join(wd, ".codex", "config.toml"), "utf-8");
       assert.match(
         output,
-        /Removed retired \[mcp_servers\.omx_team_run\] config during refresh\./,
+        /deprecated first-party OMX MCP registrations were detected but preserved/,
       );
-      assert.doesNotMatch(config, /^\[mcp_servers\.omx_team_run\]$/m);
+      assert.match(config, /^\[mcp_servers\.omx_team_run\]$/m);
     } finally {
       await rm(wd, { recursive: true, force: true });
     }

@@ -301,6 +301,32 @@ function localPluginMcpServerTableHeaderPattern(serverName: string): RegExp {
 	);
 }
 
+export function hasLocalOmxPluginMcpServerRegistrations(config: string): boolean {
+	const lines = config.split(/\r?\n/);
+	return OMX_FIRST_PARTY_MCP_SERVER_NAMES.some((serverName) =>
+		lines.some((line) => localPluginMcpServerTableHeaderPattern(serverName).test(line)),
+	);
+}
+
+export function stripLocalOmxPluginMcpServerRegistrations(config: string): string {
+	let lines = config.split(/\r?\n/);
+	for (const serverName of OMX_FIRST_PARTY_MCP_SERVER_NAMES) {
+		const headerPattern = localPluginMcpServerTableHeaderPattern(serverName);
+		const start = lines.findIndex((line) => headerPattern.test(line));
+		if (start < 0) continue;
+
+		let end = lines.length;
+		for (let index = start + 1; index < lines.length; index += 1) {
+			if (isTomlTableHeader(lines[index])) {
+				end = index;
+				break;
+			}
+		}
+		lines = [...lines.slice(0, start), ...lines.slice(end)];
+	}
+	return lines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
+}
+
 function upsertTomlTableBooleanKey(
 	config: string,
 	header: string,
@@ -389,13 +415,21 @@ export function upsertLocalOmxPluginEnablement(config: string): string {
 export function upsertLocalOmxPluginMcpServerEnablement(
 	config: string,
 	enabled: boolean,
+	options: { removeWhenDisabled?: boolean } = {},
 ): string {
+	if (!enabled && options.removeWhenDisabled) {
+		const stripped = stripLocalOmxPluginMcpServerRegistrations(config);
+		return stripped ? `${stripped}\n` : "";
+	}
+	if (!enabled) {
+		return config;
+	}
 	let next = config;
 	for (const serverName of OMX_FIRST_PARTY_MCP_SERVER_NAMES) {
 		const header = `[plugins.${JSON.stringify(OMX_LOCAL_PLUGIN_CONFIG_KEY)}.mcp_servers.${serverName}]`;
 		const headerPattern = localPluginMcpServerTableHeaderPattern(serverName);
 		next = upsertTomlTableBooleanKey(next, header, headerPattern, "enabled", enabled, {
-			create: true,
+			create: enabled,
 		});
 	}
 	return next;
