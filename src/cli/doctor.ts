@@ -1597,13 +1597,19 @@ function describePluginMcpState(content: string, mcpMode?: SetupMcpMode): Check 
 	const missingCount = states.filter((state) => state === null).length;
 	const expectedEnabled = mcpMode === "compat";
 
-	if (missingCount === 0 && enabledCount === (expectedEnabled ? states.length : 0)) {
+	if (expectedEnabled && missingCount === 0 && enabledCount === states.length) {
 		return {
 			name: "MCP Servers",
 			status: "pass",
-			message: expectedEnabled
-				? `plugin MCP compatibility enabled by setup MCP mode compat (${enabledCount}/${states.length} first-party servers enabled)`
-				: `CLI-first plugin mode: first-party MCP compatibility explicitly disabled (${disabledCount}/${states.length} first-party servers disabled)`,
+			message: `plugin MCP compatibility enabled by setup MCP mode compat (${enabledCount}/${states.length} first-party servers enabled)`,
+		};
+	}
+
+	if (!expectedEnabled && enabledCount === 0) {
+		return {
+			name: "MCP Servers",
+			status: "pass",
+			message: `CLI-first plugin mode: first-party MCP compatibility explicitly disabled (${enabledCount}/${states.length} first-party servers enabled; ${disabledCount} disabled, ${missingCount} omitted)`,
 		};
 	}
 

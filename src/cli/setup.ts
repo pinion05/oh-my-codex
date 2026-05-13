@@ -47,6 +47,9 @@ import {
 	upsertManagedCodexHookTrustState,
 	stripManagedCodexHookTrustState,
 	OMX_PLUGIN_DEVELOPER_INSTRUCTIONS,
+	hasFirstPartyOmxMcpRegistrations,
+	extractFirstPartyOmxMcpSections,
+	stripFirstPartyOmxMcpSections,
 } from "../config/generator.js";
 import type { CodexHookFeatureFlag } from "../config/codex-feature-flags.js";
 import {
@@ -100,6 +103,7 @@ import {
 	upsertLocalOmxMarketplaceRegistration,
 	upsertLocalOmxPluginEnablement,
 	upsertLocalOmxPluginMcpServerEnablement,
+	hasLocalOmxPluginMcpServerRegistrations,
 } from "./plugin-marketplace.js";
 import { resolveCodexHookFeatureFlagForCli } from "./codex-feature-probe.js";
 
@@ -156,6 +160,10 @@ interface SetupOptions {
 	pluginDeveloperInstructionsPrompt?: (configPath: string) => Promise<boolean>;
 	pluginDeveloperInstructionsOverwritePrompt?: (
 		configPath: string,
+	) => Promise<boolean>;
+	firstPartyMcpRemovalPrompt?: (
+		configPath: string,
+		registrationKinds: string[],
 	) => Promise<boolean>;
 	mcpRegistryCandidates?: string[];
 }
@@ -631,6 +639,35 @@ async function promptForSetupInstallMode(
 		if (answer === "2" || answer === "plugin") return "plugin";
 		if (answer === "1" || answer === "legacy") return "legacy";
 		return defaultMode;
+	} finally {
+		rl.close();
+	}
+}
+
+async function promptForFirstPartyMcpRemoval(
+	configPath: string,
+	registrationKinds: string[],
+): Promise<boolean> {
+	if (!process.stdin.isTTY || !process.stdout.isTTY) {
+		return false;
+	}
+	const rl = createInterface({
+		input: process.stdin,
+		output: process.stdout,
+	});
+	try {
+		console.log("Deprecated first-party OMX MCP registration detected:");
+		console.log(`  ${configPath}`);
+		console.log(`  ${registrationKinds.join(", ")}`);
+		console.log(
+			"  OMX is CLI-first by default now; first-party MCP compatibility is legacy/explicit.",
+		);
+		const answer = (
+			await rl.question("Remove first-party OMX MCP registrations now? [y/N]: ")
+		)
+			.trim()
+			.toLowerCase();
+		return answer === "y" || answer === "yes";
 	} finally {
 		rl.close();
 	}
@@ -1404,6 +1441,7 @@ async function ensurePluginMarketplaceRegistration(
 	configPath: string,
 	pkgRoot: string,
 	mcpMode: SetupMcpMode,
+	removeFirstPartyMcp: boolean,
 	backupContext: SetupBackupContext,
 	summary: SetupCategorySummary,
 	options: Pick<SetupOptions, "dryRun" | "verbose">,
@@ -1421,6 +1459,7 @@ async function ensurePluginMarketplaceRegistration(
 		upsertLocalOmxPluginMcpServerEnablement(
 			upsertLocalOmxPluginEnablement(existingConfig),
 			mcpMode === "compat",
+			{ removeWhenDisabled: removeFirstPartyMcp },
 		),
 		pkgRoot,
 	);
@@ -1581,12 +1620,18 @@ async function applyPluginDeveloperInstructionsDefault(
 async function cleanupPluginModeLegacyConfig(
 	configPath: string,
 	backupContext: SetupBackupContext,
-	options: Pick<SetupOptions, "dryRun" | "verbose">,
+	options: Pick<SetupOptions, "dryRun" | "verbose"> & {
+		preserveFirstPartyMcp?: boolean;
+	},
 ): Promise<boolean> {
 	if (!existsSync(configPath)) return false;
 
 	const original = await readFile(configPath, "utf-8");
+	const preservedFirstPartyMcp = options.preserveFirstPartyMcp
+		? extractFirstPartyOmxMcpSections(original)
+		: "";
 	let config = original;
+	config = stripFirstPartyOmxMcpSections(config);
 	config = stripExistingOmxBlocks(config).cleaned;
 	config = stripExistingSharedMcpRegistryBlock(config).cleaned;
 	config = stripPluginModeLegacyRootDefaults(config);
@@ -1594,6 +1639,9 @@ async function cleanupPluginModeLegacyConfig(
 	config = stripOmxFeatureFlags(config);
 	config = stripManagedCodexHookTrustState(config);
 	config = stripOmxEnvSettings(config);
+	if (preservedFirstPartyMcp) {
+		config = `${config.trimEnd()}\n\n${preservedFirstPartyMcp}\n`;
+	}
 	config = config.trim();
 	const nextConfig = config.length > 0 ? `${config}\n` : "";
 
@@ -1656,6 +1704,7 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 		pluginAgentsMdPrompt,
 		pluginDeveloperInstructionsPrompt,
 		pluginDeveloperInstructionsOverwritePrompt,
+		firstPartyMcpRemovalPrompt,
 	} = options;
 	const pkgRoot = getPackageRoot();
 	const projectRoot = process.cwd();
@@ -1713,6 +1762,37 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 		persistedPreferences,
 	);
 	const scopeDirs = resolveScopeDirectories(resolvedScope.scope, projectRoot);
+	const existingConfigForMcpMigration = existsSync(scopeDirs.codexConfigFile)
+		? await readFile(scopeDirs.codexConfigFile, "utf-8")
+		: "";
+	const firstPartyMcpRegistrationKinds = [
+		hasFirstPartyOmxMcpRegistrations(existingConfigForMcpMigration)
+			? "config.toml [mcp_servers.omx_*]"
+			: null,
+		hasLocalOmxPluginMcpServerRegistrations(existingConfigForMcpMigration)
+			? "plugin mcp_servers overrides"
+			: null,
+	].filter((kind): kind is string => typeof kind === "string");
+	let removeFirstPartyMcpRegistrations = false;
+	const shouldOfferFirstPartyMcpRemoval =
+		resolvedMcpMode.mcpMode !== "compat" &&
+		firstPartyMcpRegistrationKinds.length > 0;
+	if (shouldOfferFirstPartyMcpRemoval) {
+		const canPrompt =
+			typeof firstPartyMcpRemovalPrompt === "function" ||
+			(process.stdin.isTTY && process.stdout.isTTY);
+		if (canPrompt) {
+			removeFirstPartyMcpRegistrations = firstPartyMcpRemovalPrompt
+				? await firstPartyMcpRemovalPrompt(
+						scopeDirs.codexConfigFile,
+						firstPartyMcpRegistrationKinds,
+					)
+				: await promptForFirstPartyMcpRemoval(
+						scopeDirs.codexConfigFile,
+						firstPartyMcpRegistrationKinds,
+					);
+		}
+	}
 	const scopeSourceMessage =
 		resolvedScope.source === "persisted" ? " (from .omx/setup-scope.json)" : "";
 	const backupContext = getBackupContext(resolvedScope.scope, projectRoot);
@@ -1755,6 +1835,17 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 	console.log(
 		`Using setup MCP mode: ${resolvedMcpMode.mcpMode}${mcpModeSourceMessage}\n`,
 	);
+	if (shouldOfferFirstPartyMcpRemoval) {
+		if (removeFirstPartyMcpRegistrations) {
+			console.log(
+				"Deprecated first-party OMX MCP registrations will be removed from config.toml during this setup run.\n",
+			);
+		} else {
+			console.log(
+				"warning: deprecated first-party OMX MCP registrations were detected but preserved. OMX supports CLI-first setup by default; rerun interactively and answer yes to remove them, or use --mcp compat only when explicit MCP compatibility is required.\n",
+			);
+		}
+	}
 
 	// Step 1: Ensure directories exist
 	console.log("[1/8] Creating directories...");
@@ -1993,7 +2084,13 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 		const configCleaned = await cleanupPluginModeLegacyConfig(
 			scopeDirs.codexConfigFile,
 			backupContext,
-			{ dryRun, verbose },
+			{
+				dryRun,
+				verbose,
+				preserveFirstPartyMcp:
+					shouldOfferFirstPartyMcpRemoval &&
+					!removeFirstPartyMcpRegistrations,
+			},
 		);
 		if (configCleaned) summary.config.removed += 1;
 		console.log(
@@ -2015,6 +2112,7 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 			scopeDirs.codexConfigFile,
 			pkgRoot,
 			resolvedMcpMode.mcpMode,
+			removeFirstPartyMcpRegistrations,
 			backupContext,
 			summary.config,
 			{ dryRun, verbose },
@@ -2124,6 +2222,7 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 			pkgRoot,
 			sharedMcpRegistry,
 			resolvedMcpMode.mcpMode,
+			shouldOfferFirstPartyMcpRemoval && !removeFirstPartyMcpRegistrations,
 			resolvedScope.scope,
 			scopeDirs.codexHomeDir,
 			summary.config,
@@ -3321,6 +3420,7 @@ async function updateManagedConfig(
 	pkgRoot: string,
 	sharedMcpRegistry: UnifiedMcpRegistryLoadResult,
 	mcpMode: SetupMcpMode,
+	preserveExistingFirstPartyMcp: boolean,
 	scope: SetupScope,
 	codexHomeDir: string,
 	summary: SetupCategorySummary,
@@ -3373,6 +3473,7 @@ async function updateManagedConfig(
 		forceStatusLinePreset: options.forceStatusLinePreset,
 		notifyCommand: notifyPlan.notifyCommand,
 		includeFirstPartyMcp: mcpMode === "compat",
+		preserveExistingFirstPartyMcp,
 	});
 	const changed = existing !== finalConfig;
 
