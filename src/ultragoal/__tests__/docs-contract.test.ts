@@ -56,4 +56,25 @@ describe('ultragoal docs contract', () => {
       assert.doesNotMatch(doc, /On the final story only, call `update_goal/);
     }
   });
+
+  it('documents Team as the parallel execution engine while leader owns Ultragoal checkpointing', () => {
+    const docs = [
+      loadDoc('docs/ultragoal.md'),
+      loadDoc('skills/ultragoal/SKILL.md'),
+      loadDoc('plugins/oh-my-codex/skills/ultragoal/SKILL.md'),
+    ];
+
+    for (const doc of docs) {
+      assert.match(doc, /use ultragoal and team together/i);
+      assert.match(doc, /Team is the parallel execution engine/i);
+      assert.match(doc, /leader checkpoints Ultragoal from Team evidence/i);
+      assert.match(doc, /\.omx\/ultragoal\/goals\.json/);
+      assert.match(doc, /\.omx\/ultragoal\/ledger\.jsonl/);
+      assert.match(doc, /fresh `get_goal` snapshot/i);
+      assert.match(doc, /--codex-goal-json/);
+      assert.match(doc, /workers do not own ultragoal goal state/i);
+      assert.match(doc, /no hidden Codex goal mutation/i);
+      assert.doesNotMatch(doc, /auto[- ]launches Team/i);
+    }
+  });
 });

@@ -25,6 +25,11 @@ import {
 } from "../worker-bootstrap.js";
 import { composeRoleInstructionsForRole } from "../../agents/native-config.js";
 import { buildTeamWorkerGoalInstruction } from "../goal-workflow.js";
+import {
+  normalizeUltragoalTeamContext,
+  renderLeaderOwnedUltragoalContextSection,
+  resolveLeaderOwnedUltragoalContext,
+} from "../ultragoal-context.js";
 import type { TeamTask } from "../state.js";
 
 function setMockCodexHome(codexHomePath: string): () => void {
@@ -277,6 +282,192 @@ describe("worker bootstrap", () => {
     );
     assert.match(inbox, /Verification Requirements/);
     assert.match(inbox, /Fix-Verify Loop/);
+  });
+
+  it("generateInitialInbox renders leader-owned Ultragoal context without worker goal authority", () => {
+    const tasks: TeamTask[] = [{
+      id: "1",
+      subject: "Team runtime bridge",
+      description: "Implement Team + Ultragoal bridge",
+      status: "pending",
+      created_at: new Date().toISOString(),
+    }];
+    const contextSection = renderLeaderOwnedUltragoalContextSection({
+      kind: "leader_owned_ultragoal_context",
+      goalsPath: ".omx/ultragoal/goals.json",
+      ledgerPath: ".omx/ultragoal/ledger.jsonl",
+      activeGoalId: "G001-team-runtime-bridge",
+      activeGoalTitle: "Team runtime bridge",
+      codexGoalMode: "aggregate",
+      checkpointPolicy: "fresh_leader_get_goal_required",
+    });
+
+    const inbox = generateInitialInbox("worker-1", "team-inbox", "executor", tasks, {
+      approvedContextSection: contextSection,
+    });
+
+    assert.match(inbox, /Leader-owned Ultragoal context/);
+    assert.match(inbox, /\.omx\/ultragoal\/goals\.json/);
+    assert.match(inbox, /\.omx\/ultragoal\/ledger\.jsonl/);
+    assert.match(inbox, /G001-team-runtime-bridge/);
+    assert.match(inbox, /omx ultragoal checkpoint/);
+    assert.match(inbox, /--codex-goal-json/);
+    assert.match(inbox, /workers do not own Ultragoal goal state/);
+    assert.doesNotMatch(inbox, /worker-owned ultragoal ledger/i);
+    assert.doesNotMatch(inbox, /will auto-?launch Team from Ultragoal/i);
+  });
+
+  it("rejects unsafe Ultragoal goal IDs before rendering shell checkpoint templates", () => {
+    const context = normalizeUltragoalTeamContext({
+      kind: "leader_owned_ultragoal_context",
+      goalsPath: ".omx/ultragoal/goals.json",
+      ledgerPath: ".omx/ultragoal/ledger.jsonl",
+      activeGoalId: "G001-runtime; touch /tmp/pwned",
+      codexGoalMode: "aggregate",
+      checkpointPolicy: "fresh_leader_get_goal_required",
+    });
+
+    assert.equal(context, null);
+  });
+
+  it("preserves legacy Ultragoal per-story mode when goals.json omits codexGoalMode", async () => {
+    const wd = await mkdtemp(join(tmpdir(), "omx-team-ultragoal-legacy-"));
+    try {
+      await mkdir(join(wd, ".omx", "ultragoal"), { recursive: true });
+      await writeFile(
+        join(wd, ".omx", "ultragoal", "goals.json"),
+        `${JSON.stringify({
+          version: 1,
+          activeGoalId: "G001-legacy-story",
+          goals: [{
+            id: "G001-legacy-story",
+            title: "Legacy story",
+            status: "in_progress",
+          }],
+        })}\n`,
+      );
+
+      const context = await resolveLeaderOwnedUltragoalContext(wd);
+
+      assert.equal(context?.activeGoalId, "G001-legacy-story");
+      assert.equal(context?.codexGoalMode, "per_story");
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores completed or idle Ultragoal plans without an active goal", async () => {
+    const wd = await mkdtemp(join(tmpdir(), "omx-team-ultragoal-idle-"));
+    try {
+      await mkdir(join(wd, ".omx", "ultragoal"), { recursive: true });
+      await writeFile(
+        join(wd, ".omx", "ultragoal", "goals.json"),
+        `${JSON.stringify({
+          version: 1,
+          goals: [{
+            id: "G001-done",
+            title: "Done story",
+            status: "complete",
+          }],
+        })}\n`,
+      );
+
+      const context = await resolveLeaderOwnedUltragoalContext(wd);
+
+      assert.equal(context, null);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when present Ultragoal goals.json has an invalid codexGoalMode", async () => {
+    const wd = await mkdtemp(join(tmpdir(), "omx-team-ultragoal-bad-mode-"));
+    try {
+      await mkdir(join(wd, ".omx", "ultragoal"), { recursive: true });
+      await writeFile(
+        join(wd, ".omx", "ultragoal", "goals.json"),
+        `${JSON.stringify({
+          version: 1,
+          activeGoalId: "G001-active",
+          codexGoalMode: "surprise",
+          goals: [{
+            id: "G001-active",
+            title: "Active story",
+            status: "in_progress",
+          }],
+        })}\n`,
+      );
+
+      await assert.rejects(
+        () => resolveLeaderOwnedUltragoalContext(wd),
+        /invalid_ultragoal_team_context:invalid_codex_goal_mode/,
+      );
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when active Ultragoal goal is not in progress", async () => {
+    const wd = await mkdtemp(join(tmpdir(), "omx-team-ultragoal-stale-active-"));
+    try {
+      await mkdir(join(wd, ".omx", "ultragoal"), { recursive: true });
+      await writeFile(
+        join(wd, ".omx", "ultragoal", "goals.json"),
+        `${JSON.stringify({
+          version: 1,
+          activeGoalId: "G001-done",
+          goals: [{
+            id: "G001-done",
+            title: "Done story",
+            status: "complete",
+          }],
+        })}\n`,
+      );
+
+      await assert.rejects(
+        () => resolveLeaderOwnedUltragoalContext(wd),
+        /invalid_ultragoal_team_context:active_goal_not_in_progress:G001-done/,
+      );
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when present Ultragoal goals.json is malformed", async () => {
+    const wd = await mkdtemp(join(tmpdir(), "omx-team-ultragoal-malformed-"));
+    try {
+      await mkdir(join(wd, ".omx", "ultragoal"), { recursive: true });
+      await writeFile(join(wd, ".omx", "ultragoal", "goals.json"), "{bad json\n");
+
+      await assert.rejects(
+        () => resolveLeaderOwnedUltragoalContext(wd),
+        /invalid_ultragoal_team_context:malformed_goals_json/,
+      );
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when present Ultragoal goals.json has an unsafe active goal id", async () => {
+    const wd = await mkdtemp(join(tmpdir(), "omx-team-ultragoal-unsafe-"));
+    try {
+      await mkdir(join(wd, ".omx", "ultragoal"), { recursive: true });
+      await writeFile(
+        join(wd, ".omx", "ultragoal", "goals.json"),
+        `${JSON.stringify({
+          version: 1,
+          activeGoalId: "G001-unsafe; touch /tmp/pwned",
+          goals: [],
+        })}\n`,
+      );
+
+      await assert.rejects(
+        () => resolveLeaderOwnedUltragoalContext(wd),
+        /invalid_ultragoal_team_context:unsafe_active_goal_id/,
+      );
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
   });
 
 
@@ -1128,6 +1319,79 @@ describe("worker bootstrap", () => {
     assert.match(inbox, /Approved context pack: \.omx\/context\/context-20260507T120000Z-issue-2040\.json/);
     assert.match(inbox, /Build refs \(read first\): src\/build-1\.ts/);
     assert.match(inbox, /Verify refs: src\/verify-2\.ts/);
+  });
+
+  it("generateInitialInbox preserves leader-owned Ultragoal context without worker goal state", () => {
+    const inbox = generateInitialInbox(
+      "worker-1",
+      "team-ultragoal",
+      "executor",
+      [{
+        id: "1",
+        subject: "Implement G001 bridge",
+        description: "Return Team evidence for Ultragoal checkpointing",
+        status: "pending",
+        owner: "worker-1",
+        created_at: "2026-05-13T00:00:00.000Z",
+      }],
+      {
+        approvedContextSection: [
+          "- Approved plan: .omx/plans/prd-ultragoal-team-linking.md",
+          "- Leader-owned Ultragoal context:",
+          "  - kind: leader_owned_ultragoal_context",
+          "  - goals_path: .omx/ultragoal/goals.json",
+          "  - ledger_path: .omx/ultragoal/ledger.jsonl",
+          "  - active_goal_id: G001-team-runtime-bridge",
+          "  - checkpoint_policy: fresh_leader_get_goal_required",
+          "  - Team workers provide task/evidence updates only; workers do not own ultragoal goal state or create worker ultragoal ledgers.",
+          "  - Leader checkpoint command shape:",
+          "    omx ultragoal checkpoint --goal-id G001-team-runtime-bridge --status complete --evidence \"<team evidence mentioning .omx/ultragoal and G001-team-runtime-bridge>\" --codex-goal-json <fresh-active-get_goal-json-or-path>",
+        ].join("\n"),
+      },
+    );
+
+    assert.match(inbox, /Leader-owned Ultragoal context/);
+    assert.match(inbox, /\.omx\/ultragoal\/goals\.json/);
+    assert.match(inbox, /\.omx\/ultragoal\/ledger\.jsonl/);
+    assert.match(inbox, /G001-team-runtime-bridge/);
+    assert.match(inbox, /omx ultragoal checkpoint/);
+    assert.match(inbox, /--codex-goal-json/);
+    assert.match(inbox, /fresh_leader_get_goal_required/);
+    assert.match(inbox, /workers provide task\/evidence updates only/i);
+    assert.doesNotMatch(inbox, /worker-owned ultragoal ledger/i);
+    assert.doesNotMatch(inbox, /auto[- ]launch.*team/i);
+  });
+
+  it("generateTaskAssignmentInbox preserves Ultragoal context for follow-up assignments", () => {
+    const inbox = generateTaskAssignmentInbox(
+      "worker-2",
+      "team-ultragoal",
+      {
+        id: "2",
+        subject: "Verify checkpoint evidence",
+        description: "Check Team evidence can feed the Ultragoal leader checkpoint",
+        status: "pending",
+        created_at: "2026-05-13T00:00:00.000Z",
+      },
+      {
+        approvedContextSection: [
+          "- Leader-owned Ultragoal context:",
+          "  - goals_path: .omx/ultragoal/goals.json",
+          "  - ledger_path: .omx/ultragoal/ledger.jsonl",
+          "  - active_goal_id: G001-team-runtime-bridge",
+          "  - checkpoint_policy: fresh_leader_get_goal_required",
+          "  - Leader checkpoint command shape:",
+          "    omx ultragoal checkpoint --goal-id G001-team-runtime-bridge --status complete --evidence \"<team evidence>\" --codex-goal-json <fresh-active-get_goal-json-or-path>",
+        ].join("\n"),
+      },
+    );
+
+    assert.match(inbox, /## Approved Handoff Context/);
+    assert.match(inbox, /Leader-owned Ultragoal context/);
+    assert.match(inbox, /omx ultragoal checkpoint/);
+    assert.match(inbox, /--codex-goal-json/);
+    assert.match(inbox, /fresh_leader_get_goal_required/);
+    assert.doesNotMatch(inbox, /workers? checkpoint Ultragoal/i);
   });
 
 });

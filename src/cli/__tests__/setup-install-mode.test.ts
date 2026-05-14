@@ -709,6 +709,101 @@ describe("omx setup install mode behavior", () => {
 		}
 	});
 
+	it("warns and preserves existing first-party MCP registrations in non-interactive default setup", async () => {
+		const wd = await mkdtemp(join(tmpdir(), "omx-setup-mcp-preserve-"));
+		try {
+			await withIsolatedUserHome(wd, async (codexHomeDir) => {
+				const configPath = join(codexHomeDir, "config.toml");
+				await writeFile(
+					configPath,
+					[
+						"[mcp_servers.omx_state]",
+						'command = "node"',
+						'args = ["/tmp/state-server.js"]',
+						"",
+						"[mcp_servers.user_tool]",
+						'command = "user-tool"',
+						"",
+					].join("\n"),
+				);
+				const output = await runSetupWithCapturedLogs(wd, {
+					scope: "user",
+					installMode: "legacy",
+				});
+				const config = await readFile(configPath, "utf-8");
+				assert.match(output, /deprecated first-party OMX MCP registrations were detected but preserved/);
+				assert.match(config, /^\[mcp_servers\.omx_state\]$/m);
+				assert.match(config, /^\[mcp_servers\.user_tool\]$/m);
+			});
+		} finally {
+			await rm(wd, { recursive: true, force: true });
+		}
+	});
+
+	it("removes existing first-party MCP registrations only when the interactive migration prompt is accepted", async () => {
+		const wd = await mkdtemp(join(tmpdir(), "omx-setup-mcp-remove-"));
+		try {
+			await withIsolatedUserHome(wd, async (codexHomeDir) => {
+				const configPath = join(codexHomeDir, "config.toml");
+				await writeFile(
+					configPath,
+					[
+						"[mcp_servers.omx_state]",
+						'command = "node"',
+						'args = ["/tmp/state-server.js"]',
+						"",
+						"[mcp_servers.omx_team_run]",
+						'command = "node"',
+						"",
+						"[mcp_servers.user_tool]",
+						'command = "user-tool"',
+						"",
+					].join("\n"),
+				);
+				const output = await runSetupWithCapturedLogs(wd, {
+					scope: "user",
+					installMode: "legacy",
+					firstPartyMcpRemovalPrompt: async (_path, kinds) => {
+						assert.deepEqual(kinds, ["config.toml [mcp_servers.omx_*]"]);
+						return true;
+					},
+				});
+				const config = await readFile(configPath, "utf-8");
+				assert.match(output, /Deprecated first-party OMX MCP registrations will be removed/);
+				assert.doesNotMatch(config, /^\[mcp_servers\.omx_state\]$/m);
+				assert.doesNotMatch(config, /^\[mcp_servers\.omx_team_run\]$/m);
+				assert.match(config, /^\[mcp_servers\.user_tool\]$/m);
+			});
+		} finally {
+			await rm(wd, { recursive: true, force: true });
+		}
+	});
+
+	it("preserves existing first-party MCP registrations when the interactive migration prompt is declined", async () => {
+		const wd = await mkdtemp(join(tmpdir(), "omx-setup-mcp-decline-"));
+		try {
+			await withIsolatedUserHome(wd, async (codexHomeDir) => {
+				const configPath = join(codexHomeDir, "config.toml");
+				await writeFile(
+					configPath,
+					"[mcp_servers.omx_memory]\ncommand = \"node\"\n\n[mcp_servers.user_tool]\ncommand = \"user-tool\"\n",
+				);
+				await withTempCwd(wd, async () => {
+					await setup({
+						scope: "user",
+						installMode: "legacy",
+						firstPartyMcpRemovalPrompt: async () => false,
+					});
+				});
+				const config = await readFile(configPath, "utf-8");
+				assert.match(config, /^\[mcp_servers\.omx_memory\]$/m);
+				assert.match(config, /^\[mcp_servers\.user_tool\]$/m);
+			});
+		} finally {
+			await rm(wd, { recursive: true, force: true });
+		}
+	});
+
 	it("defaults to plugin mode when an installed oh-my-codex plugin cache is discovered", async () => {
 		const wd = await mkdtemp(join(tmpdir(), "omx-setup-install-mode-"));
 		try {
@@ -1066,7 +1161,7 @@ describe("omx setup install mode behavior", () => {
 		}
 	});
 
-	it("enables plugin MCP subtables only when compat MCP mode is requested", async () => {
+	it("registers plugin MCP subtables only when compat MCP mode is requested", async () => {
 		const wd = await mkdtemp(join(tmpdir(), "omx-setup-install-mode-"));
 		try {
 			await withIsolatedUserHome(wd, async (codexHomeDir) => {
@@ -1106,9 +1201,82 @@ describe("omx setup install mode behavior", () => {
 					assert.equal(
 						parsed.plugins?.["oh-my-codex@oh-my-codex-local"]?.mcp_servers
 							?.omx_state?.enabled,
-						false,
+						true,
 					);
 				});
+			});
+		} finally {
+			await rm(wd, { recursive: true, force: true });
+		}
+	});
+
+	it("removes plugin MCP registrations only when the migration prompt is accepted", async () => {
+		const wd = await mkdtemp(join(tmpdir(), "omx-setup-plugin-mcp-remove-"));
+		try {
+			await withIsolatedUserHome(wd, async (codexHomeDir) => {
+				const configPath = join(codexHomeDir, "config.toml");
+				await writeFile(
+					configPath,
+					[
+						"[mcp_servers.omx_state]",
+						'command = "node"',
+						"",
+						'[plugins."oh-my-codex@oh-my-codex-local"]',
+						"enabled = true",
+						"",
+						'[plugins."oh-my-codex@oh-my-codex-local".mcp_servers.omx_memory]',
+						"enabled = true",
+						"",
+					].join("\n"),
+				);
+				await withTempCwd(wd, async () => {
+					await setup({
+						scope: "user",
+						installMode: "plugin",
+						firstPartyMcpRemovalPrompt: async (_path, kinds) => {
+							assert.deepEqual(kinds, [
+								"config.toml [mcp_servers.omx_*]",
+								"plugin mcp_servers overrides",
+							]);
+							return true;
+						},
+					});
+				});
+				const config = await readFile(configPath, "utf-8");
+				assert.doesNotMatch(config, /mcp_servers\.omx_state/);
+				assert.doesNotMatch(config, /mcp_servers\.omx_memory/);
+			});
+		} finally {
+			await rm(wd, { recursive: true, force: true });
+		}
+	});
+
+	it("preserves plugin-mode top-level MCP registrations without duplicating them when removal is declined", async () => {
+		const wd = await mkdtemp(join(tmpdir(), "omx-setup-plugin-mcp-preserve-"));
+		try {
+			await withIsolatedUserHome(wd, async (codexHomeDir) => {
+				const configPath = join(codexHomeDir, "config.toml");
+				await writeFile(
+					configPath,
+					[
+						"[mcp_servers.omx_state]",
+						'command = "node"',
+						"",
+						"[mcp_servers.user_tool]",
+						'command = "user-tool"',
+						"",
+					].join("\n"),
+				);
+				await withTempCwd(wd, async () => {
+					await setup({
+						scope: "user",
+						installMode: "plugin",
+						firstPartyMcpRemovalPrompt: async () => false,
+					});
+				});
+				const config = await readFile(configPath, "utf-8");
+				assert.equal(config.match(/^\[mcp_servers\.omx_state\]$/gm)?.length, 1);
+				assert.match(config, /^\[mcp_servers\.user_tool\]$/m);
 			});
 		} finally {
 			await rm(wd, { recursive: true, force: true });
@@ -1255,7 +1423,7 @@ describe("omx setup install mode behavior", () => {
 					assert.match(config, /^hooks = true$/m);
 					assert.doesNotMatch(config, /notify-hook/);
 					assert.doesNotMatch(config, /^\s*\[mcp_servers[.\]]/m);
-					assert.match(config, /mcp_servers\.omx_state]\nenabled = false/);
+					assert.doesNotMatch(config, /mcp_servers\.omx_state/);
 
 					const agentsMd = await readFile(
 						join(codexHomeDir, "AGENTS.md"),

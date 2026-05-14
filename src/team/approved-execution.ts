@@ -17,6 +17,18 @@ export interface ApprovedTeamExecutionBinding {
   command?: string;
 }
 
+export interface UltragoalCheckpointGuidance {
+  goal_id: string;
+  goal_title?: string;
+  codex_goal_mode: 'aggregate' | 'per_story';
+  goals_path: '.omx/ultragoal/goals.json';
+  ledger_path: '.omx/ultragoal/ledger.jsonl';
+  checkpoint_policy: 'fresh_leader_get_goal_required';
+  checkpoint_command_template: string;
+  final_checkpoint_command_template: string;
+  evidence_requirements: string[];
+}
+
 export type PersistedApprovedTeamExecutionBindingReadResult =
   | { status: 'missing' }
   | { status: 'malformed' }
@@ -86,26 +98,84 @@ function renderApprovedRepositoryContextSummary(
   return lines;
 }
 
-function renderRoleRefLine(label: string, refs: readonly string[]): string | null {
-  return refs.length > 0
-    ? `- ${label}: ${refs.join(', ')}`
-    : null;
+function readApprovedHintSourceText(
+  approvedHint: ApprovedExecutionLaunchHint,
+): string {
+  try {
+    return readFileSync(approvedHint.sourcePath, 'utf-8');
+  } catch {
+    return '';
+  }
+}
+
+function detectUltragoalId(text: string): string | null {
+  return text.match(/\bG\d{3}[-\w]*/)?.[0] ?? null;
+}
+
+function detectUltragoalMode(text: string): 'aggregate' | 'per_story' {
+  return /per[- ]story/i.test(text) ? 'per_story' : 'aggregate';
+}
+
+export function buildUltragoalCheckpointGuidance(
+  approvedHint: ApprovedExecutionLaunchHint | null | undefined,
+): UltragoalCheckpointGuidance | null {
+  if (!approvedHint || approvedHint.mode !== 'team') {
+    return null;
+  }
+
+  const sourceText = readApprovedHintSourceText(approvedHint);
+  const detectionText = [
+    approvedHint.task,
+    approvedHint.command ?? '',
+    sourceText,
+  ].join('\n');
+  if (!/ultragoal|\.omx\/ultragoal/i.test(detectionText)) {
+    return null;
+  }
+
+  const goalId = detectUltragoalId(detectionText);
+  const goalIdDisplay = goalId ?? '<read .omx/ultragoal/goals.json first>';
+  return {
+    goal_id: goalIdDisplay,
+    codex_goal_mode: detectUltragoalMode(detectionText),
+    goals_path: '.omx/ultragoal/goals.json',
+    ledger_path: '.omx/ultragoal/ledger.jsonl',
+    checkpoint_policy: 'fresh_leader_get_goal_required',
+    checkpoint_command_template: '<leader must read verified .omx/ultragoal/goals.json context before constructing checkpoint command>',
+    final_checkpoint_command_template: '<leader must read verified .omx/ultragoal/goals.json context and pass final quality gates before constructing checkpoint command>',
+    evidence_requirements: [
+      'team tasks are terminal',
+      'verification passed',
+      goalId ? `evidence mentions ${goalId}` : 'leader resolved the active goal ID from .omx/ultragoal/goals.json',
+      'evidence mentions .omx/ultragoal artifacts',
+      'leader captured a fresh get_goal snapshot',
+    ],
+  };
+}
+
+export function renderLeaderOwnedUltragoalContext(
+  guidance: UltragoalCheckpointGuidance | null | undefined,
+): string[] {
+  if (!guidance) return [];
+  return [
+    '',
+    '- Approved-plan Ultragoal hint:',
+    '  - source: approved Team handoff text; leader must verify `.omx/ultragoal/goals.json` before checkpointing.',
+    `  - goals_path: ${guidance.goals_path}`,
+    `  - ledger_path: ${guidance.ledger_path}`,
+    `  - hinted_goal_id: ${guidance.goal_id}`,
+    `  - codex_goal_mode: ${guidance.codex_goal_mode}`,
+    `  - checkpoint_policy: ${guidance.checkpoint_policy}`,
+    '  - Team workers provide task/evidence updates only; workers do not own ultragoal goal state or create worker ultragoal ledgers.',
+    '  - No checkpoint command is emitted from approved-plan hints; concrete commands require verified leader-owned Ultragoal context.',
+    '  - Final aggregate story requires final quality gates before update_goal, then fresh get_goal and --quality-gate-json.',
+  ];
 }
 
 export function buildApprovedTeamHandoffSection(
   approvedHint: ApprovedExecutionLaunchHint | null | undefined,
 ): string | undefined {
-  if (
-    !approvedHint
-    || approvedHint.mode !== 'team'
-    || approvedHint.contextPackStatus !== 'ready'
-    || !approvedHint.contextPackRoleRefs
-  ) {
-    return undefined;
-  }
-
-  const { build, verify, scope } = approvedHint.contextPackRoleRefs;
-  if (build.length === 0 && verify.length === 0 && scope.length === 0) {
+  if (!approvedHint || approvedHint.mode !== 'team') {
     return undefined;
   }
 
@@ -113,31 +183,12 @@ export function buildApprovedTeamHandoffSection(
   if (approvedHint.testSpecPaths.length > 0) {
     lines.push(`- Test specs: ${approvedHint.testSpecPaths.join(', ')}`);
   }
-  if (approvedHint.contextPack) {
-    lines.push(`- Approved context pack: ${approvedHint.contextPack.path}`);
-  }
   if (approvedHint.repositoryContextSummary) {
     lines.push(...renderApprovedRepositoryContextSummary(approvedHint.repositoryContextSummary));
   }
+  lines.push(...renderLeaderOwnedUltragoalContext(buildUltragoalCheckpointGuidance(approvedHint)));
 
-  const buildLine = renderRoleRefLine('Build refs (read first)', build);
-  const verifyLine = renderRoleRefLine('Verify refs', verify);
-  const scopeLine = renderRoleRefLine('Scope refs', scope);
-  if (buildLine) {
-    lines.push(buildLine);
-  }
-  if (verifyLine) {
-    lines.push(verifyLine);
-  }
-  if (scopeLine) {
-    lines.push(scopeLine);
-  }
-
-  lines.push(
-    build.length > 0
-      ? '- Read the build refs above before broader repo exploration.'
-      : '- Read the approved refs above before broader repo exploration.',
-  );
+  lines.push('- Use the approved plan and matching test specs as the execution baseline.');
   return lines.join('\n');
 }
 

@@ -2240,6 +2240,118 @@ esac
     }
   });
 
+  it('startTeam rejects ready-prompt timeout when dispatch never produces startup evidence', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-ready-timeout-no-evidence-'));
+    const previousTmux = process.env.TMUX;
+    const previousTmuxPane = process.env.TMUX_PANE;
+    const previousLaunchMode = process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
+    const previousWorkerCli = process.env.OMX_TEAM_WORKER_CLI;
+    const previousReadyTimeout = process.env.OMX_TEAM_READY_TIMEOUT_MS;
+    const previousStartupEvidenceTimeout = process.env.OMX_TEAM_STARTUP_EVIDENCE_TIMEOUT_MS;
+    const previousStartupDispatchRetries = process.env.OMX_TEAM_STARTUP_DISPATCH_RETRIES;
+    const teamName = `trt-${process.pid}-${Date.now().toString(36)}`;
+    let receiptNotifier: NodeJS.Timeout | null = null;
+    let runtimeTeamName: string | null = null;
+
+    try {
+      await withMockTmuxFixture(
+        {
+          dirPrefix: 'omx-runtime-ready-timeout-no-evidence-bin-',
+          tmuxScript: (tmuxLogPath) => `#!/bin/sh
+set -eu
+printf '%s\\n' "$*" >> "${tmuxLogPath}"
+case "$1" in
+  -V)
+    echo "tmux 3.4"
+    exit 0
+    ;;
+  display-message)
+    case "$*" in
+      *"#{window_width}"*) echo "120" ;;
+      *) echo "leader:0 %1" ;;
+    esac
+    exit 0
+    ;;
+  list-panes)
+    case "$*" in
+      *"pane_current_command"*) printf "%%1\\tnode\\t'codex'\\n" ;;
+      *"#{pane_dead} #{pane_pid}"*) echo "0 4242" ;;
+      *"#{pane_dead}"*) echo "0" ;;
+      *"#{pane_pid}"*) echo "4242" ;;
+      *) exit 0 ;;
+    esac
+    exit 0
+    ;;
+  capture-pane)
+    printf 'worker process is still starting; no agent prompt yet\\n'
+    exit 0
+    ;;
+  split-window)
+    echo "%2"
+    exit 0
+    ;;
+  set-hook|run-shell|select-layout|set-window-option|select-pane|send-keys|kill-pane|kill-session|resize-pane)
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`,
+          binaries: [{ name: 'codex', content: fakeCodexNodeScript('process.stdin.resume();\n') }],
+        },
+        async ({ tmuxLogPath }) => {
+          delete process.env.TMUX;
+          process.env.TMUX_PANE = '%1';
+          process.env.OMX_TEAM_WORKER_LAUNCH_MODE = 'interactive';
+          process.env.OMX_TEAM_WORKER_CLI = 'codex';
+          process.env.OMX_TEAM_READY_TIMEOUT_MS = '5000';
+          process.env.OMX_TEAM_STARTUP_EVIDENCE_TIMEOUT_MS = '500';
+          process.env.OMX_TEAM_STARTUP_DISPATCH_RETRIES = '1';
+
+          receiptNotifier = setInterval(() => {
+            void markPendingInboxDispatchesNotified(teamName, cwd);
+          }, 20);
+
+          await assert.rejects(
+            withoutTeamWorkerEnv(() =>
+              startTeam(
+                teamName,
+                'ready prompt timeout should not count a draft-only worker as started',
+                'executor',
+                1,
+                [{ subject: 'w1', description: 'worker one', owner: 'worker-1' }],
+                cwd,
+              )),
+            /worker_notify_failed:worker-1:codex_startup_no_evidence_after_fallback/,
+          );
+
+          const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
+          assert.match(tmuxLog, /send-keys -t %2 -l --/);
+          runtimeTeamName = await resolveRuntimeTeamName(cwd, teamName).catch(() => null);
+        },
+      );
+    } finally {
+      if (receiptNotifier) clearInterval(receiptNotifier);
+      if (runtimeTeamName) await shutdownTeam(runtimeTeamName, cwd, { force: true }).catch(() => {});
+      if (typeof previousTmux === 'string') process.env.TMUX = previousTmux;
+      else delete process.env.TMUX;
+      if (typeof previousTmuxPane === 'string') process.env.TMUX_PANE = previousTmuxPane;
+      else delete process.env.TMUX_PANE;
+      if (typeof previousLaunchMode === 'string') process.env.OMX_TEAM_WORKER_LAUNCH_MODE = previousLaunchMode;
+      else delete process.env.OMX_TEAM_WORKER_LAUNCH_MODE;
+      if (typeof previousWorkerCli === 'string') process.env.OMX_TEAM_WORKER_CLI = previousWorkerCli;
+      else delete process.env.OMX_TEAM_WORKER_CLI;
+      if (typeof previousReadyTimeout === 'string') process.env.OMX_TEAM_READY_TIMEOUT_MS = previousReadyTimeout;
+      else delete process.env.OMX_TEAM_READY_TIMEOUT_MS;
+      if (typeof previousStartupEvidenceTimeout === 'string') process.env.OMX_TEAM_STARTUP_EVIDENCE_TIMEOUT_MS = previousStartupEvidenceTimeout;
+      else delete process.env.OMX_TEAM_STARTUP_EVIDENCE_TIMEOUT_MS;
+      if (typeof previousStartupDispatchRetries === 'string') process.env.OMX_TEAM_STARTUP_DISPATCH_RETRIES = previousStartupDispatchRetries;
+      else delete process.env.OMX_TEAM_STARTUP_DISPATCH_RETRIES;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('startTeam starts worker-2 readiness before delayed worker-1 readiness settles', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-parallel-ready-'));
     const previousTmux = process.env.TMUX;
@@ -6145,7 +6257,7 @@ esac
     }
   });
 
-  it('resumeTeam fails closed when the persisted approved binding is nonready', async () => {
+  it('resumeTeam accepts persisted approved bindings that still resolve to a baseline-ready hint', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-approved-resume-nonready-'));
     try {
       await initTeamState('team-approved-resume', 'approved resume test', 'executor', 1, cwd);
@@ -6169,10 +6281,8 @@ esac
         task: 'Execute approved issue 2112 plan',
       });
 
-      await assert.rejects(
-        () => resumeTeam('team-approved-resume', cwd),
-        /approved_execution_binding_nonready:invalid:.*Execute approved issue 2112 plan/,
-      );
+      const resumed = await resumeTeam('team-approved-resume', cwd);
+      assert.equal(resumed, null);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
@@ -6518,6 +6628,63 @@ esac
     }
   });
 
+  it('startTeam treats a completed Ultragoal plan without activeGoalId as no active bridge context', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-ultragoal-idle-start-'));
+    const binDir = join(cwd, 'bin');
+    const fakeCodexPath = join(binDir, 'codex');
+    await mkdir(binDir, { recursive: true });
+    await mkdir(join(cwd, '.omx', 'ultragoal'), { recursive: true });
+    await writeFile(
+      join(cwd, '.omx', 'ultragoal', 'goals.json'),
+      `${JSON.stringify({
+        version: 1,
+        codexGoalMode: 'aggregate',
+        goals: [{
+          id: 'G001-completed-story',
+          title: 'Completed story',
+          status: 'complete',
+        }],
+      })}\n`,
+    );
+    await writeFakePromptWorkerBinary(
+      fakeCodexPath,
+      `setTimeout(() => {}, 5000);`,
+    );
+
+    let runtime: TeamRuntime | null = null;
+    try {
+      runtime = await withPromptModeCodexEnv(binDir, {}, () =>
+        withoutTeamWorkerEnv(() =>
+          startTeam(
+            'team-ultragoal-idle-start',
+            'completed Ultragoal artifacts must not block unrelated team startup',
+            'executor',
+            1,
+            [{ subject: 's', description: 'd', owner: 'worker-1' }],
+            cwd,
+          ),
+        ),
+      );
+
+      const teamStateRoot = runtime.config.team_state_root ?? join(cwd, '.omx', 'state');
+      assert.equal(
+        existsSync(join(teamStateRoot, 'team', runtime.teamName, 'ultragoal-context.json')),
+        false,
+      );
+      const inbox = await readFile(
+        join(teamStateRoot, 'team', runtime.teamName, 'workers', 'worker-1', 'inbox.md'),
+        'utf-8',
+      );
+      assert.doesNotMatch(inbox, /Leader-owned Ultragoal context/);
+      assert.doesNotMatch(inbox, /omx ultragoal checkpoint --goal-id G001-completed-story/);
+    } finally {
+      if (runtime) {
+        await shutdownTeam(runtime.teamName, cwd, { force: true }).catch(() => {});
+      }
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('startTeam injects approved handoff context into ready approved worker inboxes', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-approved-handoff-'));
     const binDir = join(cwd, 'bin');
@@ -6527,7 +6694,6 @@ esac
     await mkdir(join(cwd, '.omx', 'plans'), { recursive: true });
     const prdPath = join(cwd, '.omx', 'plans', 'prd-issue-1314-handoff.md');
     const testSpecPath = join(cwd, '.omx', 'plans', 'test-spec-issue-1314-handoff.md');
-    const contextPackPath = join(cwd, canonicalContextPackRelativePath('issue-1314-handoff'));
     await writeFile(
       prdPath,
       [
@@ -6578,13 +6744,10 @@ esac
       assert.match(inbox, /## Approved Handoff Context/);
       assert.match(inbox, new RegExp(`Approved plan: ${prdPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
       assert.match(inbox, new RegExp(`Test specs: ${testSpecPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
-      assert.match(inbox, new RegExp(`Approved context pack: ${contextPackPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
       assert.match(inbox, /Approved repository context summary source: .*repo-context-issue-1314-handoff\.md/);
       assert.match(inbox, /Read the approved repository slice first\./);
-      assert.match(inbox, /Build refs \(read first\): src\/build-1\.ts/);
-      assert.match(inbox, /Verify refs: src\/verify-2\.ts/);
-      assert.match(inbox, /Scope refs: src\/scope-0\.ts/);
-      assert.doesNotMatch(inbox, /query the canonical pack|Context pack index/);
+      assert.match(inbox, /Use the approved plan and matching test specs as the execution baseline/);
+      assert.doesNotMatch(inbox, /Approved context pack|Build refs|Verify refs|Scope refs|query the canonical pack|Context pack index/);
     } finally {
       if (runtime) {
         await shutdownTeam(runtime.teamName, cwd, { force: true }).catch(() => {});
@@ -6593,7 +6756,7 @@ esac
     }
   });
 
-  it('startTeam keeps explicit plan-only approved bindings on the generic path', async () => {
+  it('startTeam carries explicit baseline-ready approved bindings without context-pack metadata', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-approved-binding-plan-only-'));
     const binDir = join(cwd, 'bin');
     const fakeCodexPath = join(binDir, 'codex');
@@ -6637,12 +6800,15 @@ esac
         runtime.teamName,
         'approved-execution.json',
       );
-      assert.equal(existsSync(bindingPath), false);
+      assert.equal(existsSync(bindingPath), true);
       const inbox = await readFile(
         join(cwd, '.omx', 'state', 'team', runtime.teamName, 'workers', 'worker-1', 'inbox.md'),
         'utf-8',
       );
-      assert.doesNotMatch(inbox, /## Approved Handoff Context/);
+      assert.match(inbox, /## Approved Handoff Context/);
+      assert.match(inbox, /Approved plan: .*prd-issue-1314-plan-only\.md/);
+      assert.match(inbox, /Test specs: .*test-spec-issue-1314-plan-only\.md/);
+      assert.doesNotMatch(inbox, /Approved context pack|Context pack index/);
     } finally {
       if (runtime) {
         await shutdownTeam(runtime.teamName, cwd, { force: true }).catch(() => {});
@@ -6651,13 +6817,13 @@ esac
     }
   });
 
-  it('startTeam fails closed when an explicit approved execution binding is nonready', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-approved-binding-nonready-'));
+  it('startTeam carries explicit baseline-ready bindings despite obsolete context-pack markers', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-approved-binding-obsolete-marker-'));
     const binDir = join(cwd, 'bin');
     const fakeCodexPath = join(binDir, 'codex');
     await mkdir(binDir, { recursive: true });
     await mkdir(join(cwd, '.omx', 'plans'), { recursive: true });
-    const prdPath = join(cwd, '.omx', 'plans', 'prd-issue-1314-nonready.md');
+    const prdPath = join(cwd, '.omx', 'plans', 'prd-issue-1314-obsolete-marker.md');
     await writeFile(
       prdPath,
       [
@@ -6667,42 +6833,51 @@ esac
         '',
         '- pack: created `.omx/context/context-20260507T120000Z-other.json`',
         '',
-        'Launch via omx team 1:executor "Execute approved issue 1314 nonready plan"',
+        'Launch via omx team 1:executor "Execute approved issue 1314 obsolete-marker plan"',
       ].join('\n'),
     );
-    await writeFile(join(cwd, '.omx', 'plans', 'test-spec-issue-1314-nonready.md'), '# Test spec\n');
+    await writeFile(join(cwd, '.omx', 'plans', 'test-spec-issue-1314-obsolete-marker.md'), '# Test spec\n');
     await writeFakePromptWorkerBinary(
       fakeCodexPath,
       `setTimeout(() => {}, 5000);`,
     );
 
+    let runtime: TeamRuntime | null = null;
     try {
-      await assert.rejects(
-        () => withPromptModeCodexEnv(binDir, {}, () =>
-          withoutTeamWorkerEnv(() =>
-            startTeam(
-              'team-approved-binding-nonready',
-              'approved binding nonready start test',
-              'executor',
-              1,
-              [{ subject: 's', description: 'd', owner: 'worker-1' }],
-              cwd,
-              {
-                approvedExecution: {
-                  prd_path: prdPath,
-                  task: 'Execute approved issue 1314 nonready plan',
-                },
+      runtime = await withPromptModeCodexEnv(binDir, {}, () =>
+        withoutTeamWorkerEnv(() =>
+          startTeam(
+            'team-approved-binding-obsolete-marker',
+            'approved binding obsolete-marker start test',
+            'executor',
+            1,
+            [{ subject: 's', description: 'd', owner: 'worker-1' }],
+            cwd,
+            {
+              approvedExecution: {
+                prd_path: prdPath,
+                task: 'Execute approved issue 1314 obsolete-marker plan',
               },
-            ),
+            },
           ),
         ),
-        /approved_execution_binding_nonready:invalid:.*Execute approved issue 1314 nonready plan/,
       );
       assert.equal(
-        existsSync(join(cwd, '.omx', 'state', 'team', 'team-approved-binding-nonready')),
-        false,
+        existsSync(join(runtime.config.team_state_root ?? join(cwd, '.omx', 'state'), 'team', runtime.teamName, 'approved-execution.json')),
+        true,
       );
+      const inbox = await readFile(
+        join(cwd, '.omx', 'state', 'team', runtime.teamName, 'workers', 'worker-1', 'inbox.md'),
+        'utf-8',
+      );
+      assert.match(inbox, /## Approved Handoff Context/);
+      assert.match(inbox, /Approved plan: .*prd-issue-1314-obsolete-marker\.md/);
+      assert.match(inbox, /Test specs: .*test-spec-issue-1314-obsolete-marker\.md/);
+      assert.doesNotMatch(inbox, /Approved context pack|Context pack index/);
     } finally {
+      if (runtime) {
+        await shutdownTeam(runtime.teamName, cwd, { force: true }).catch(() => {});
+      }
       await rm(cwd, { recursive: true, force: true });
     }
   });
@@ -6949,7 +7124,6 @@ esac
       await mkdir(plansDir, { recursive: true });
       const prdPath = join(plansDir, 'prd-issue-1320.md');
       const testSpecPath = join(plansDir, 'test-spec-issue-1320.md');
-      const contextPackPath = join(cwd, canonicalContextPackRelativePath('issue-1320'));
       await writeFile(
         prdPath,
         [
@@ -7003,12 +7177,9 @@ esac
       assert.match(inbox, /## Approved Handoff Context/);
       assert.match(inbox, new RegExp(`Approved plan: ${prdPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
       assert.match(inbox, new RegExp(`Test specs: ${testSpecPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
-      assert.match(inbox, new RegExp(`Approved context pack: ${contextPackPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
-      assert.match(inbox, /Build refs \(read first\): src\/build-1\.ts/);
-      assert.match(inbox, /Verify refs: src\/verify-2\.ts/);
-      assert.match(inbox, /Scope refs: src\/scope-0\.ts/);
+      assert.match(inbox, /Use the approved plan and matching test specs as the execution baseline/);
       assert.match(inbox, /Follow the approved repository slice before broader repo exploration\./);
-      assert.doesNotMatch(inbox, /query the canonical pack|Context pack index/);
+      assert.doesNotMatch(inbox, /Approved context pack|Build refs|Verify refs|Scope refs|query the canonical pack|Context pack index/);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

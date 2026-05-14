@@ -30,6 +30,7 @@ import {
   buildApprovedTeamExecutionBinding,
   writePersistedApprovedTeamExecutionBinding,
 } from '../../team/approved-execution.js';
+import { writePersistedTeamUltragoalContext } from '../../team/ultragoal-context.js';
 import { isRealTmuxAvailable, withTempTmuxSession, type TempTmuxSessionFixture } from '../../team/__tests__/tmux-test-fixture.js';
 
 const OMX_CLI_PATH = fileURLToPath(new URL('../omx.js', import.meta.url));
@@ -318,7 +319,7 @@ describe('parseTeamStartArgs', () => {
     }
   });
 
-  it('reuses the older same-signature approved team hint when the latest matching handoff is missing its baseline', async () => {
+  it('does not reuse an older approved team hint when the latest matching handoff is missing its baseline', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-team-followup-lineage-missing-baseline-'));
     const previousCwd = process.cwd();
     const approvedTask = 'Execute approved Team lineage follow-up';
@@ -337,10 +338,10 @@ describe('parseTeamStartArgs', () => {
       );
 
       const result = parseTeamStartArgs(['team']);
-      assert.equal(result.parsed.task, approvedTask);
+      assert.equal(result.parsed.task, 'team');
       assert.equal(result.parsed.workerCount, 3);
       assert.equal(result.parsed.agentType, 'executor');
-      assert.equal(result.parsed.allowRepoAwareDagHandoff, true);
+      assert.equal(result.parsed.allowRepoAwareDagHandoff, false);
       assert.equal(result.parsed.approvedExecution, undefined);
     } finally {
       process.chdir(previousCwd);
@@ -348,7 +349,7 @@ describe('parseTeamStartArgs', () => {
     }
   });
 
-  it('reuses the older ready Team handoff when the latest same-signature handoff is invalid', async () => {
+  it('does not reuse an older ready Team handoff when the latest same-signature handoff lacks a baseline', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-team-followup-lineage-invalid-'));
     const previousCwd = process.cwd();
     const approvedTask = 'Execute approved Team invalid lineage follow-up';
@@ -381,22 +382,19 @@ describe('parseTeamStartArgs', () => {
           `Launch via ${approvedCommand}`,
         ].join('\n'),
       );
-      await writeFile(join(plansDir, 'test-spec-zeta-team-lineage-invalid.md'), '# Test spec\n');
-
       const result = parseTeamStartArgs(['team']);
-      assert.equal(result.parsed.task, approvedTask);
+      assert.equal(result.parsed.task, 'team');
       assert.equal(result.parsed.workerCount, 3);
       assert.equal(result.parsed.agentType, 'executor');
-      assert.equal(result.parsed.allowRepoAwareDagHandoff, true);
-      assert.equal(result.parsed.approvedExecution?.command, approvedCommand);
-      assert.equal(sameFilePath(result.parsed.approvedExecution?.prd_path ?? '', alphaPrdPath), true);
+      assert.equal(result.parsed.allowRepoAwareDagHandoff, false);
+      assert.equal(result.parsed.approvedExecution, undefined);
     } finally {
       process.chdir(previousCwd);
       await rm(wd, { recursive: true, force: true });
     }
   });
 
-  it('reuses the older ready Team handoff when the latest same-signature handoff is incomplete', async () => {
+  it('does not reuse an older ready Team handoff when the latest same-signature handoff is incomplete', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-team-followup-lineage-incomplete-'));
     const previousCwd = process.cwd();
     const approvedTask = 'Execute approved Team incomplete lineage follow-up';
@@ -420,7 +418,6 @@ describe('parseTeamStartArgs', () => {
       await writeFile(alphaTestSpecPath, '# Test spec\n');
       await writeReadyContextPack(wd, 'alpha-team-lineage-complete', alphaPrdPath, alphaTestSpecPath);
       const zetaPrdPath = join(plansDir, 'prd-zeta-team-lineage-incomplete.md');
-      const zetaTestSpecPath = join(plansDir, 'test-spec-zeta-team-lineage-incomplete.md');
       await writeFile(
         zetaPrdPath,
         [
@@ -431,16 +428,12 @@ describe('parseTeamStartArgs', () => {
           `Launch via ${approvedCommand}`,
         ].join('\n'),
       );
-      await writeFile(zetaTestSpecPath, '# Test spec\n');
-      await writeContextPack(wd, 'zeta-team-lineage-incomplete', zetaPrdPath, zetaTestSpecPath, ['scope']);
-
       const result = parseTeamStartArgs(['team']);
-      assert.equal(result.parsed.task, approvedTask);
+      assert.equal(result.parsed.task, 'team');
       assert.equal(result.parsed.workerCount, 3);
       assert.equal(result.parsed.agentType, 'executor');
-      assert.equal(result.parsed.allowRepoAwareDagHandoff, true);
-      assert.equal(result.parsed.approvedExecution?.command, approvedCommand);
-      assert.equal(sameFilePath(result.parsed.approvedExecution?.prd_path ?? '', alphaPrdPath), true);
+      assert.equal(result.parsed.allowRepoAwareDagHandoff, false);
+      assert.equal(result.parsed.approvedExecution, undefined);
     } finally {
       process.chdir(previousCwd);
       await rm(wd, { recursive: true, force: true });
@@ -647,7 +640,7 @@ describe('parseTeamStartArgs', () => {
     }
   });
 
-  it('keeps plan-only short follow-ups on the generic path even when a persisted approved binding exists', async () => {
+  it('carries plan-only short follow-ups when a persisted binding resolves to a baseline-ready hint', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-team-followup-plan-only-'));
     const previousCwd = process.cwd();
     try {
@@ -676,14 +669,16 @@ describe('parseTeamStartArgs', () => {
       assert.equal(result.parsed.task, 'Execute approved issue 2085 plan');
       assert.equal(result.parsed.workerCount, 3);
       assert.equal(result.parsed.agentType, 'executor');
-      assert.equal(result.parsed.approvedExecution, undefined);
+      assert.equal(result.parsed.approvedExecution?.task, 'Execute approved issue 2085 plan');
+      assert.equal(result.parsed.approvedExecution?.command, command);
+      assert.equal(sameFilePath(result.parsed.approvedExecution?.prd_path ?? '', prdPath), true);
     } finally {
       process.chdir(previousCwd);
       await rm(wd, { recursive: true, force: true });
     }
   });
 
-  it('fails short follow-up reuse when the latest approved handoff is nonready', async () => {
+  it('keeps short follow-up generic when the latest approved handoff is non-baseline', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-team-followup-nonready-'));
     const previousCwd = process.cwd();
     try {
@@ -702,19 +697,17 @@ describe('parseTeamStartArgs', () => {
           'Launch via omx team 3:executor "Execute approved issue 2086 plan"',
         ].join('\n'),
       );
-      await writeFile(join(plansDir, 'test-spec-issue-2086.md'), '# Test spec\n');
-
-      assert.throws(
-        () => parseTeamStartArgs(['team']),
-        /approved_execution_hint_nonready:team:invalid/,
-      );
+      const result = parseTeamStartArgs(['team']);
+      assert.equal(result.parsed.task, 'team');
+      assert.equal(result.parsed.allowRepoAwareDagHandoff, false);
+      assert.equal(result.parsed.approvedExecution, undefined);
     } finally {
       process.chdir(previousCwd);
       await rm(wd, { recursive: true, force: true });
     }
   });
 
-  it('fails short follow-up reuse when the latest approved handoff is missing its baseline', async () => {
+  it('keeps short follow-up generic when the latest approved handoff is missing its baseline', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-team-followup-missing-baseline-'));
     const previousCwd = process.cwd();
     try {
@@ -726,17 +719,17 @@ describe('parseTeamStartArgs', () => {
         '# Approved plan\n\nLaunch via omx team 3:executor "Execute approved issue 2086 missing-baseline plan"\n',
       );
 
-      assert.throws(
-        () => parseTeamStartArgs(['team']),
-        /approved_execution_hint_nonready:team:missing-baseline/,
-      );
+      const result = parseTeamStartArgs(['team']);
+      assert.equal(result.parsed.task, 'team');
+      assert.equal(result.parsed.allowRepoAwareDagHandoff, false);
+      assert.equal(result.parsed.approvedExecution, undefined);
     } finally {
       process.chdir(previousCwd);
       await rm(wd, { recursive: true, force: true });
     }
   });
 
-  it('fails short follow-up reuse when the latest approved handoff is incomplete', async () => {
+  it('keeps short follow-up generic when the latest approved handoff is incomplete and non-baseline', async () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-team-followup-incomplete-'));
     const previousCwd = process.cwd();
     try {
@@ -744,7 +737,6 @@ describe('parseTeamStartArgs', () => {
       const plansDir = join(wd, '.omx', 'plans');
       await mkdir(plansDir, { recursive: true });
       const prdPath = join(plansDir, 'prd-issue-2086-incomplete.md');
-      const testSpecPath = join(plansDir, 'test-spec-issue-2086-incomplete.md');
       await writeFile(
         prdPath,
         [
@@ -755,13 +747,10 @@ describe('parseTeamStartArgs', () => {
           'Launch via omx team 3:executor "Execute approved issue 2086 incomplete plan"',
         ].join('\n'),
       );
-      await writeFile(testSpecPath, '# Test spec\n');
-      await writeContextPack(wd, 'issue-2086-incomplete', prdPath, testSpecPath, ['scope']);
-
-      assert.throws(
-        () => parseTeamStartArgs(['team']),
-        /approved_execution_hint_nonready:team:incomplete/,
-      );
+      const result = parseTeamStartArgs(['team']);
+      assert.equal(result.parsed.task, 'team');
+      assert.equal(result.parsed.allowRepoAwareDagHandoff, false);
+      assert.equal(result.parsed.approvedExecution, undefined);
     } finally {
       process.chdir(previousCwd);
       await rm(wd, { recursive: true, force: true });
@@ -1236,11 +1225,10 @@ describe('parseTeamStartArgs', () => {
         join(wd, '.omx', 'plans', 'prd-issue-2087.md'),
         '# Approved plan\n\nLaunch via omx team 3:executor "Execute approved issue 2087 plan"\n',
       );
-      await writeFile(join(wd, '.omx', 'plans', 'test-spec-issue-2087.md'), '# Test spec\n');
-      await writeFile(join(wd, '.omx', 'plans', 'repo-context-issue-2087.md'), 'Do not widen plan-only context.\n');
+      await writeFile(join(wd, '.omx', 'plans', 'repo-context-issue-2087.md'), 'Do not widen non-baseline context.\n');
 
       const result = parseTeamStartArgs(['3:executor', 'Execute', 'approved', 'issue', '2087', 'plan']);
-      assert.equal(result.parsed.allowRepoAwareDagHandoff, true);
+      assert.equal(result.parsed.allowRepoAwareDagHandoff, false);
       assert.equal(result.parsed.approvedExecution, undefined);
       assert.equal(result.parsed.approvedRepositoryContextSummary, undefined);
     } finally {
@@ -1249,7 +1237,7 @@ describe('parseTeamStartArgs', () => {
     }
   });
 
-  it('preserves lifecycle-specific DAG fallback reasons for explicit nonready approved launches', async () => {
+  it('uses generic DAG fallback reasons for explicit non-baseline approved launches', async () => {
     const previousCwd = process.cwd();
     const cases = [
       {
@@ -1258,25 +1246,23 @@ describe('parseTeamStartArgs', () => {
         includeOutcome: false,
         writeTestSpec: false,
         packSetup: async (_wd: string, _prdPath: string, _testSpecPath: string) => {},
-        expected: 'context_pack_not_followup_ready:missing-baseline',
+        expected: 'dag_handoff_not_approved_for_invocation',
       },
       {
         name: 'incomplete',
         slug: 'issue-2090-incomplete',
         includeOutcome: true,
-        writeTestSpec: true,
-        packSetup: async (wd: string, prdPath: string, testSpecPath: string) => {
-          await writeContextPack(wd, 'issue-2090-incomplete', prdPath, testSpecPath, ['scope']);
-        },
-        expected: 'context_pack_not_followup_ready:incomplete',
+        writeTestSpec: false,
+        packSetup: async (_wd: string, _prdPath: string, _testSpecPath: string) => {},
+        expected: 'dag_handoff_not_approved_for_invocation',
       },
       {
         name: 'invalid',
         slug: 'issue-2090-invalid',
         includeOutcome: true,
-        writeTestSpec: true,
+        writeTestSpec: false,
         packSetup: async (_wd: string, _prdPath: string, _testSpecPath: string) => {},
-        expected: 'context_pack_not_followup_ready:invalid',
+        expected: 'dag_handoff_not_approved_for_invocation',
       },
     ] as const;
 
@@ -1328,7 +1314,7 @@ describe('parseTeamStartArgs', () => {
           });
 
           assert.equal(parsed.parsed.allowRepoAwareDagHandoff, false);
-          assert.equal(parsed.parsed.dagFallbackReason, scenario.expected);
+          assert.equal(parsed.parsed.dagFallbackReason, undefined);
           assert.equal(parsed.parsed.approvedExecution, undefined);
           assert.equal(executionPlan.metadata?.decomposition_source, 'legacy_text');
           assert.equal(executionPlan.metadata?.fallback_reason, scenario.expected);
@@ -2890,6 +2876,166 @@ describe('teamCommand status', () => {
       const payload = JSON.parse(logs[0] ?? '{}') as { workspace_mode?: string | null; status?: string };
       assert.equal(payload.status, 'ok');
       assert.equal(payload.workspace_mode, 'worktree');
+    } finally {
+      console.log = originalLog;
+      process.chdir(previousCwd);
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('returns Ultragoal checkpoint guidance in JSON status only when approved Team context exists', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-team-status-ultragoal-json-'));
+    const previousCwd = process.cwd();
+    const logs: string[] = [];
+    const originalLog = console.log;
+    try {
+      process.chdir(wd);
+      await withoutTeamTestWorkerEnv(() => initTeamState('ultragoal-json-team', 'inspect ultragoal guidance', 'executor', 1, wd));
+      const plansDir = join(wd, '.omx', 'plans');
+      await mkdir(plansDir, { recursive: true });
+      const prdPath = join(plansDir, 'prd-ultragoal-json.md');
+      const testSpecPath = join(plansDir, 'test-spec-ultragoal-json.md');
+      const task = 'Execute Team + Ultragoal G001-team-runtime-bridge plan';
+      await writeFile(
+        prdPath,
+        [
+          '# Ultragoal JSON status',
+          '',
+          'Active ultragoal story G001-team-runtime-bridge uses .omx/ultragoal/goals.json and .omx/ultragoal/ledger.jsonl.',
+          `Launch via omx team 1:executor "${task}"`,
+        ].join('\n'),
+      );
+      await writeFile(testSpecPath, '# Ultragoal JSON status test spec\n');
+      const hint = readApprovedExecutionLaunchHint(wd, 'team', { prdPath, task });
+      assert.ok(hint);
+      await writePersistedApprovedTeamExecutionBinding(
+        'ultragoal-json-team',
+        wd,
+        buildApprovedTeamExecutionBinding(hint),
+      );
+      await writePersistedTeamUltragoalContext('ultragoal-json-team', wd, {
+        kind: 'leader_owned_ultragoal_context',
+        goalsPath: '.omx/ultragoal/goals.json',
+        ledgerPath: '.omx/ultragoal/ledger.jsonl',
+        activeGoalId: 'G001-team-runtime-bridge',
+        codexGoalMode: 'aggregate',
+        checkpointPolicy: 'fresh_leader_get_goal_required',
+      });
+      console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
+
+      await withoutTeamTestWorkerEnv(() => teamCommand(['status', 'ultragoal-json-team', '--json']));
+
+      const payload = JSON.parse(logs[0] ?? '{}') as {
+        ultragoal_checkpoint_guidance?: {
+          goal_id?: string;
+          goals_path?: string;
+          ledger_path?: string;
+          checkpoint_policy?: string;
+          checkpoint_command_template?: string;
+          evidence_requirements?: string[];
+        } | null;
+      };
+      assert.equal(payload.ultragoal_checkpoint_guidance?.goal_id, 'G001-team-runtime-bridge');
+      assert.equal(payload.ultragoal_checkpoint_guidance?.goals_path, '.omx/ultragoal/goals.json');
+      assert.equal(payload.ultragoal_checkpoint_guidance?.ledger_path, '.omx/ultragoal/ledger.jsonl');
+      assert.equal(payload.ultragoal_checkpoint_guidance?.checkpoint_policy, 'fresh_leader_get_goal_required');
+      assert.match(payload.ultragoal_checkpoint_guidance?.checkpoint_command_template ?? '', /omx ultragoal checkpoint/);
+      assert.match(payload.ultragoal_checkpoint_guidance?.checkpoint_command_template ?? '', /--codex-goal-json/);
+      assert.ok(payload.ultragoal_checkpoint_guidance?.evidence_requirements?.some((item) => item.includes('.omx/ultragoal artifacts')));
+    } finally {
+      console.log = originalLog;
+      process.chdir(previousCwd);
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('omits Ultragoal checkpoint guidance in JSON status for completed plans without activeGoalId', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-team-status-ultragoal-idle-json-'));
+    const previousCwd = process.cwd();
+    const logs: string[] = [];
+    const originalLog = console.log;
+    try {
+      process.chdir(wd);
+      await withoutTeamTestWorkerEnv(() => initTeamState('ultragoal-idle-json-team', 'inspect idle ultragoal status', 'executor', 1, wd));
+      await mkdir(join(wd, '.omx', 'ultragoal'), { recursive: true });
+      await writeFile(
+        join(wd, '.omx', 'ultragoal', 'goals.json'),
+        `${JSON.stringify({
+          version: 1,
+          codexGoalMode: 'aggregate',
+          goals: [{
+            id: 'G001-completed-story',
+            title: 'Completed story',
+            status: 'complete',
+          }],
+        })}\n`,
+      );
+      console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
+
+      await withoutTeamTestWorkerEnv(() => teamCommand(['status', 'ultragoal-idle-json-team', '--json']));
+
+      const payload = JSON.parse(logs[0] ?? '{}') as {
+        status?: string;
+        ultragoal_checkpoint_guidance?: unknown;
+      };
+      assert.equal(payload.status, 'ok');
+      assert.equal('ultragoal_checkpoint_guidance' in payload, false);
+    } finally {
+      console.log = originalLog;
+      process.chdir(previousCwd);
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('prints Ultragoal checkpoint guidance in text status with fresh get_goal requirement', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-team-status-ultragoal-text-'));
+    const previousCwd = process.cwd();
+    const logs: string[] = [];
+    const originalLog = console.log;
+    try {
+      process.chdir(wd);
+      await withoutTeamTestWorkerEnv(() => initTeamState('ultragoal-text-team', 'inspect ultragoal text guidance', 'executor', 1, wd));
+      const plansDir = join(wd, '.omx', 'plans');
+      await mkdir(plansDir, { recursive: true });
+      const prdPath = join(plansDir, 'prd-ultragoal-text.md');
+      const testSpecPath = join(plansDir, 'test-spec-ultragoal-text.md');
+      const task = 'Execute Team + Ultragoal G001-team-runtime-bridge text plan';
+      await writeFile(
+        prdPath,
+        [
+          '# Ultragoal text status',
+          '',
+          'Team evidence checkpoints G001-team-runtime-bridge into .omx/ultragoal/goals.json and .omx/ultragoal/ledger.jsonl.',
+          `Launch via omx team 1:executor "${task}"`,
+        ].join('\n'),
+      );
+      await writeFile(testSpecPath, '# Ultragoal text status test spec\n');
+      const hint = readApprovedExecutionLaunchHint(wd, 'team', { prdPath, task });
+      assert.ok(hint);
+      await writePersistedApprovedTeamExecutionBinding(
+        'ultragoal-text-team',
+        wd,
+        buildApprovedTeamExecutionBinding(hint),
+      );
+      await writePersistedTeamUltragoalContext('ultragoal-text-team', wd, {
+        kind: 'leader_owned_ultragoal_context',
+        goalsPath: '.omx/ultragoal/goals.json',
+        ledgerPath: '.omx/ultragoal/ledger.jsonl',
+        activeGoalId: 'G001-team-runtime-bridge',
+        codexGoalMode: 'aggregate',
+        checkpointPolicy: 'fresh_leader_get_goal_required',
+      });
+      console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
+
+      await withoutTeamTestWorkerEnv(() => teamCommand(['status', 'ultragoal-text-team']));
+
+      const output = logs.join('\n');
+      assert.match(output, /ultragoal_checkpoint_guidance/);
+      assert.match(output, /G001-team-runtime-bridge/);
+      assert.match(output, /\.omx\/ultragoal\/goals\.json/);
+      assert.match(output, /\.omx\/ultragoal\/ledger\.jsonl/);
+      assert.match(output, /leader captured fresh get_goal JSON before checkpointing/i);
+      assert.match(output, /workers do not own ultragoal goal state/i);
     } finally {
       console.log = originalLog;
       process.chdir(previousCwd);

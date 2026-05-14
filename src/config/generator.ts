@@ -48,6 +48,7 @@ interface MergeOptions {
   forceStatusLinePreset?: boolean;
   notifyCommand?: string[] | false;
   includeFirstPartyMcp?: boolean;
+  preserveExistingFirstPartyMcp?: boolean;
 }
 
 function escapeTomlString(value: string): string {
@@ -1244,6 +1245,65 @@ function stripOrphanedOmxSections(config: string): string {
   return result.join("\n");
 }
 
+export function hasFirstPartyOmxMcpRegistrations(config: string): boolean {
+  const firstPartyNames = new Set<string>([
+    ...OMX_FIRST_PARTY_MCP_SERVER_NAMES,
+    "omx_team_run",
+  ]);
+  for (const line of config.split(/\r?\n/)) {
+    const match = line.match(/^\s*\[mcp_servers\.(?:"([^"]+)"|([A-Za-z0-9_-]+))\]\s*$/);
+    const name = match?.[1] ?? match?.[2];
+    if (name && firstPartyNames.has(name)) return true;
+  }
+  return false;
+}
+
+export function extractFirstPartyOmxMcpSections(config: string): string {
+  const lines = config.split(/\r?\n/);
+  const sections: string[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const tableMatch = lines[i].match(/^\s*\[([^\]]+)\]\s*$/);
+    if (!tableMatch || !isOmxFirstPartyMcpSection(tableMatch[1])) {
+      i += 1;
+      continue;
+    }
+
+    const sectionLines: string[] = [];
+    sectionLines.push(lines[i]);
+    i += 1;
+    while (i < lines.length && !/^\s*\[/.test(lines[i])) {
+      sectionLines.push(lines[i]);
+      i += 1;
+    }
+    sections.push(sectionLines.join("\n").trimEnd());
+  }
+
+  return sections.filter(Boolean).join("\n\n");
+}
+
+export function stripFirstPartyOmxMcpSections(config: string): string {
+  const lines = config.split(/\r?\n/);
+  const result: string[] = [];
+
+  for (let index = 0; index < lines.length; ) {
+    const tableMatch = lines[index].match(/^\s*\[([^\]]+)\]\s*$/);
+    if (tableMatch && isOmxFirstPartyMcpSection(tableMatch[1])) {
+      index += 1;
+      while (index < lines.length && !/^\s*\[/.test(lines[index])) {
+        index += 1;
+      }
+      continue;
+    }
+
+    result.push(lines[index]);
+    index += 1;
+  }
+
+  return result.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
+}
+
 function extractCustomizedTuiSectionsFromOmxBlocks(config: string): string[] {
   const sections: string[] = [];
   let searchStart = 0;
@@ -1885,6 +1945,11 @@ export function buildMergedConfig(
   options: MergeOptions = {},
 ): string {
   let existing = existingConfig;
+  const preservedFirstPartyMcpSections =
+    options.preserveExistingFirstPartyMcp === true &&
+    options.includeFirstPartyMcp !== true
+      ? extractFirstPartyOmxMcpSections(existing)
+      : "";
   const includeTui = options.includeTui !== false;
   const statusLinePreset =
     options.statusLinePreset ?? DEFAULT_STATUS_LINE_PRESET;
@@ -1925,6 +1990,9 @@ export function buildMergedConfig(
     existing = stripRootLevelKeys(existing, ["model"]);
   }
   existing = stripOrphanedOmxSections(existing);
+  if (preservedFirstPartyMcpSections) {
+    existing = `${existing.trimEnd()}\n\n${preservedFirstPartyMcpSections}\n`;
+  }
   existing = upsertFeatureFlags(existing, options.codexHookFeatureFlag);
   existing = upsertEnvSettings(existing);
   existing = upsertAgentsSettings(existing);

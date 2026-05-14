@@ -18,6 +18,7 @@ import {
   DEFAULT_MAX_WORKERS,
 } from '../state.js';
 import { isScalingEnabled, scaleUp, scaleDown } from '../scaling.js';
+import { resolveCanonicalTeamStateRoot } from '../state-root.js';
 import {
   resolvePersistedApprovedTeamExecutionContinuityState,
   writePersistedApprovedTeamExecutionBinding,
@@ -79,15 +80,16 @@ type ScaleUpObservedOutcome = 'generic' | 'blocked' | 'approved';
 
 type ScaleUpCount = 1 | 2 | 3;
 
-type BlockedScaleUpApprovedBindingState = Exclude<ScaleUpApprovedBindingState, 'missing' | 'plan-only' | 'ready'>;
+type BlockedScaleUpApprovedBindingState = Exclude<
+  ScaleUpApprovedBindingState,
+  'missing' | 'plan-only' | 'incomplete' | 'invalid' | 'ready'
+>;
 
 const BLOCKED_SCALE_UP_APPROVED_BINDING_STATES: readonly BlockedScaleUpApprovedBindingState[] = [
   'malformed',
   'stale',
   'ambiguous',
   'missing-baseline',
-  'incomplete',
-  'invalid',
 ];
 
 const SCALE_UP_STATE_TEAM_SUFFIX: Record<ScaleUpApprovedBindingState, string> = {
@@ -106,6 +108,8 @@ const SCALE_UP_APPROVED_BINDING_STATES: readonly ScaleUpApprovedBindingState[] =
   'missing',
   ...BLOCKED_SCALE_UP_APPROVED_BINDING_STATES,
   'plan-only',
+  'incomplete',
+  'invalid',
   'ready',
 ];
 
@@ -116,10 +120,12 @@ function assertNeverScaleUpState(state: never): never {
 }
 
 function expectedScaleUpOutcome(state: ScaleUpApprovedBindingState): ScaleUpObservedOutcome {
-  if (state === 'missing' || state === 'plan-only') {
+  if (state === 'missing') {
     return 'generic';
   }
-  return state === 'ready' ? 'approved' : 'blocked';
+  return BLOCKED_SCALE_UP_APPROVED_BINDING_STATES.includes(state as BlockedScaleUpApprovedBindingState)
+    ? 'blocked'
+    : 'approved';
 }
 
 function forbiddenScaleUpOutcomes(
@@ -127,16 +133,16 @@ function forbiddenScaleUpOutcomes(
 ): readonly ScaleUpObservedOutcome[] {
   switch (state) {
     case 'missing':
-    case 'plan-only':
       return ['blocked', 'approved'];
+    case 'plan-only':
+    case 'incomplete':
+    case 'invalid':
     case 'ready':
       return ['blocked', 'generic'];
     case 'malformed':
     case 'stale':
     case 'ambiguous':
     case 'missing-baseline':
-    case 'incomplete':
-    case 'invalid':
       return ['generic', 'approved'];
     default:
       return assertNeverScaleUpState(state);
@@ -244,6 +250,10 @@ async function configureScaleUpTeamForDirectDispatch(teamName: string, cwd: stri
   await saveTeamConfig(config, cwd);
 
   const manifestPath = join(cwd, '.omx', 'state', 'team', teamName, 'manifest.v2.json');
+  if (!existsSync(manifestPath)) {
+    await mkdir(join(cwd, '.omx', 'state', 'team', teamName), { recursive: true });
+    await writeFile(manifestPath, `${JSON.stringify({ version: 2, policy: {} }, null, 2)}\n`);
+  }
   const manifest = JSON.parse(await readFile(manifestPath, 'utf-8')) as { policy?: Record<string, unknown> };
   manifest.policy = {
     ...(manifest.policy ?? {}),
@@ -284,10 +294,7 @@ async function readExpectedScaleUpApprovedBindingError(
   if (continuity.status === 'stale') {
     return `approved_execution_binding_stale:${continuity.binding.prd_path}:${continuity.binding.task}`;
   }
-  return continuity.approvedHint.contextPackStatus === 'ready'
-    || continuity.approvedHint.contextPackStatus === 'plan-only'
-    ? null
-    : `approved_execution_binding_nonready:${continuity.approvedHint.contextPackStatus}:${continuity.binding.prd_path}:${continuity.binding.task}`;
+  return null;
 }
 
 async function prepareScaleUpApprovedBindingState(
@@ -721,6 +728,65 @@ describe('scaleUp', () => {
     }
   });
 
+  it('injects persisted leader-owned Ultragoal context into scaled worker inboxes', async () => {
+    const teamName = 'scale-up-ultragoal-context';
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-scale-up-ultragoal-context-'));
+    const fakeBinDir = await mkdtemp(join(tmpdir(), 'omx-scale-up-ultragoal-context-bin-'));
+    const tmuxLogPath = join(fakeBinDir, 'tmux.log');
+    const previousPath = process.env.PATH;
+
+    try {
+      await writeSuccessfulScaleUpTmuxStub(fakeBinDir, tmuxLogPath);
+      process.env.PATH = `${fakeBinDir}:${previousPath ?? ''}`;
+
+      await initTeamState(teamName, 'ultragoal scale-up test', 'executor', 1, cwd);
+      await configureScaleUpTeamForDirectDispatch(teamName, cwd);
+      const teamStateRoot = resolveCanonicalTeamStateRoot(cwd);
+      await mkdir(join(teamStateRoot, 'team', teamName), { recursive: true });
+      await writeFile(
+        join(teamStateRoot, 'team', teamName, 'ultragoal-context.json'),
+        `${JSON.stringify({
+          kind: 'leader_owned_ultragoal_context',
+          goalsPath: '.omx/ultragoal/goals.json',
+          ledgerPath: '.omx/ultragoal/ledger.jsonl',
+          activeGoalId: 'G001-team-runtime-bridge',
+          activeGoalTitle: 'Team runtime bridge',
+          codexGoalMode: 'aggregate',
+          checkpointPolicy: 'fresh_leader_get_goal_required',
+        })}\n`,
+      );
+
+      const result = await scaleUp(
+        teamName,
+        1,
+        'executor',
+        [{ subject: 'Implement ultragoal follow-up', description: 'Implement ultragoal follow-up', owner: 'worker-2' }],
+        cwd,
+        { OMX_TEAM_SCALING_ENABLED: '1', OMX_TEAM_SKIP_READY_WAIT: '1' },
+      );
+      assert.equal(result.ok, true);
+      if (!result.ok) return;
+
+      const inboxStateRoot = result.addedWorkers[0]?.team_state_root ?? resolveCanonicalTeamStateRoot(cwd);
+      const inbox = await readFile(
+        join(inboxStateRoot, 'team', teamName, 'workers', 'worker-2', 'inbox.md'),
+        'utf-8',
+      );
+      const tmuxCommands = await readScaleUpTmuxLogCommands(tmuxLogPath);
+      assert.match(inbox, /Implement ultragoal follow-up/);
+      assert.match(inbox, /### Leader-owned Ultragoal context/);
+      assert.match(inbox, /G001-team-runtime-bridge/);
+      assert.match(inbox, /workers do not own Ultragoal goal state/i);
+      assert.match(inbox, /omx ultragoal checkpoint --goal-id G001-team-runtime-bridge/);
+      assert.ok(tmuxCommands.some((command) => command.startsWith('split-window ')));
+    } finally {
+      if (typeof previousPath === 'string') process.env.PATH = previousPath;
+      else delete process.env.PATH;
+      await rm(cwd, { recursive: true, force: true });
+      await rm(fakeBinDir, { recursive: true, force: true });
+    }
+  });
+
   it('keeps scale-up on the generic path when no approved binding is persisted', async () => {
     const teamName = 'scale-up-no-approved-binding';
     const cwd = await mkdtemp(join(tmpdir(), 'omx-scale-up-no-approved-binding-'));
@@ -764,7 +830,7 @@ describe('scaleUp', () => {
     }
   });
 
-  it('keeps scale-up on the generic path when the persisted binding is only plan-only followup-ready', async () => {
+  it('injects approved handoff context on scale-up when the persisted binding is baseline-ready without context-pack metadata', async () => {
     const teamName = 'scale-up-plan-only';
     const cwd = await mkdtemp(join(tmpdir(), 'omx-scale-up-plan-only-'));
     const fakeBinDir = await mkdtemp(join(tmpdir(), 'omx-scale-up-plan-only-bin-'));
@@ -798,7 +864,9 @@ describe('scaleUp', () => {
       );
       const tmuxCommands = await readScaleUpTmuxLogCommands(tmuxLogPath);
       assert.match(inbox, /Implement plan-only follow-up/);
-      assert.doesNotMatch(inbox, /## Approved Handoff Context/);
+      assert.match(inbox, /## Approved Handoff Context/);
+      assert.match(inbox, /Use the approved plan and matching test specs as the execution baseline/);
+      assert.doesNotMatch(inbox, /Approved context pack|Context pack index/);
       assert.ok(tmuxCommands.some((command) => command.startsWith('split-window ')));
     } finally {
       if (typeof previousPath === 'string') process.env.PATH = previousPath;
@@ -872,10 +940,8 @@ describe('scaleUp', () => {
       assert.ok(inbox.includes(`Test specs: ${testSpecPath}`));
       assert.match(inbox, /Approved repository context summary source: .*repo-context-issue-1410\.md/);
       assert.match(inbox, /Read the approved repository slice first\./);
-      assert.match(inbox, /Build refs \(read first\): src\/build-1\.ts/);
-      assert.match(inbox, /Verify refs: src\/verify-2\.ts/);
-      assert.match(inbox, /Scope refs: src\/scope-0\.ts/);
-      assert.doesNotMatch(inbox, /query the canonical pack|Context pack index/);
+      assert.match(inbox, /Use the approved plan and matching test specs as the execution baseline/);
+      assert.doesNotMatch(inbox, /Approved context pack|Build refs|Verify refs|Scope refs|query the canonical pack|Context pack index/);
       assert.ok(tmuxCommands.some((command) => command.startsWith('split-window ')));
     } finally {
       if (typeof previousPath === 'string') process.env.PATH = previousPath;
