@@ -581,6 +581,8 @@ esac
       value: 'a',
       selected_labels: ['A'],
       selected_values: ['a'],
+    }, {
+      injectAnswersToPane: () => true,
     });
 
     const exitCode = await closePromise;
