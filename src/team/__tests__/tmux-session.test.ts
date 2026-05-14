@@ -1342,37 +1342,81 @@ describe('buildWorkerStartupCommand', () => {
   });
 
 
-  it('disables first-party OMX MCP compatibility servers for Codex team workers by default', () => {
+  it('does not synthesize absent first-party OMX MCP server tables for Codex team workers', async () => {
     const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
     const prevCompat = process.env.OMX_TEAM_WORKER_MCP_COMPAT;
-    process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
-    delete process.env.OMX_TEAM_WORKER_MCP_COMPAT;
+    const prevCodexHome = process.env.CODEX_HOME;
+    const codexHome = await mkdtemp(join(tmpdir(), 'omx-team-no-mcp-config-'));
     try {
+      await writeFile(join(codexHome, 'config.toml'), '[mcp_servers.gitnexus]\ncommand = "gitnexus"\n');
+      process.env.CODEX_HOME = codexHome;
+      process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
+      delete process.env.OMX_TEAM_WORKER_MCP_COMPAT;
+      const cmd = buildWorkerStartupCommand('alpha', 1, [], '/tmp/project', {}, 'codex');
+      for (const server of ['omx_state', 'omx_memory', 'omx_code_intel', 'omx_trace', 'omx_wiki', 'omx_hermes']) {
+        assert.doesNotMatch(cmd, new RegExp(`mcp_servers\\.${server}\\.enabled=false`));
+      }
+    } finally {
+      await rm(codexHome, { recursive: true, force: true });
+      if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
+      else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+      if (typeof prevCompat === 'string') process.env.OMX_TEAM_WORKER_MCP_COMPAT = prevCompat;
+      else delete process.env.OMX_TEAM_WORKER_MCP_COMPAT;
+      if (typeof prevCodexHome === 'string') process.env.CODEX_HOME = prevCodexHome;
+      else delete process.env.CODEX_HOME;
+    }
+  });
+
+  it('disables configured first-party OMX MCP compatibility servers for Codex team workers by default', async () => {
+    const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
+    const prevCompat = process.env.OMX_TEAM_WORKER_MCP_COMPAT;
+    const prevCodexHome = process.env.CODEX_HOME;
+    const codexHome = await mkdtemp(join(tmpdir(), 'omx-team-mcp-config-'));
+    try {
+      await writeFile(
+        join(codexHome, 'config.toml'),
+        ['omx_state', 'omx_memory', 'omx_code_intel', 'omx_trace', 'omx_wiki', 'omx_hermes']
+          .map((server) => `[mcp_servers.${server}]\ncommand = "omx"\nargs = ["mcp-serve", "${server}"]\n`)
+          .join('\n'),
+      );
+      process.env.CODEX_HOME = codexHome;
+      process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
+      delete process.env.OMX_TEAM_WORKER_MCP_COMPAT;
       const cmd = buildWorkerStartupCommand('alpha', 1, [], '/tmp/project', {}, 'codex');
       for (const server of ['omx_state', 'omx_memory', 'omx_code_intel', 'omx_trace', 'omx_wiki', 'omx_hermes']) {
         assert.match(cmd, new RegExp(`mcp_servers\\.${server}\\.enabled=false`));
       }
     } finally {
+      await rm(codexHome, { recursive: true, force: true });
       if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
       else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
       if (typeof prevCompat === 'string') process.env.OMX_TEAM_WORKER_MCP_COMPAT = prevCompat;
       else delete process.env.OMX_TEAM_WORKER_MCP_COMPAT;
+      if (typeof prevCodexHome === 'string') process.env.CODEX_HOME = prevCodexHome;
+      else delete process.env.CODEX_HOME;
     }
   });
 
-  it('preserves explicit team-worker MCP compatibility opt-in', () => {
+  it('preserves explicit team-worker MCP compatibility opt-in', async () => {
     const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
     const prevCompat = process.env.OMX_TEAM_WORKER_MCP_COMPAT;
-    process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
-    process.env.OMX_TEAM_WORKER_MCP_COMPAT = '1';
+    const prevCodexHome = process.env.CODEX_HOME;
+    const codexHome = await mkdtemp(join(tmpdir(), 'omx-team-mcp-compat-'));
     try {
+      await writeFile(join(codexHome, 'config.toml'), '[mcp_servers.omx_state]\ncommand = "omx"\n');
+      process.env.CODEX_HOME = codexHome;
+      process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = '0';
+      process.env.OMX_TEAM_WORKER_MCP_COMPAT = '1';
       const cmd = buildWorkerStartupCommand('alpha', 1, [], '/tmp/project', {}, 'codex');
       assert.doesNotMatch(cmd, /mcp_servers\.omx_state\.enabled=false/);
     } finally {
+      await rm(codexHome, { recursive: true, force: true });
       if (typeof prevBypass === 'string') process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
       else delete process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
       if (typeof prevCompat === 'string') process.env.OMX_TEAM_WORKER_MCP_COMPAT = prevCompat;
       else delete process.env.OMX_TEAM_WORKER_MCP_COMPAT;
+      if (typeof prevCodexHome === 'string') process.env.CODEX_HOME = prevCodexHome;
+      else delete process.env.CODEX_HOME;
     }
   });
 

@@ -1,6 +1,7 @@
 import { spawnSync, execFile } from 'child_process';
 import { promisify } from 'util';
 import { existsSync, readFileSync } from 'fs';
+import { homedir } from 'os';
 import { isAbsolute, join, resolve } from 'path';
 import {
   CODEX_BYPASS_FLAG,
@@ -871,9 +872,29 @@ function shouldDisableOmxMcpForTeamWorker(env: NodeJS.ProcessEnv): boolean {
   return !(raw === '1' || raw === 'true' || raw === 'on' || raw === 'compat');
 }
 
+function resolveCodexConfigPath(env: NodeJS.ProcessEnv): string {
+  const codexHomeOverride = env.CODEX_HOME?.trim();
+  const codexHomePath = codexHomeOverride
+    ? (isAbsolute(codexHomeOverride) ? codexHomeOverride : resolve(codexHomeOverride))
+    : join(homedir(), '.codex');
+  return join(codexHomePath, 'config.toml');
+}
+
+function codexConfigDeclaresMcpServer(serverName: string, env: NodeJS.ProcessEnv): boolean {
+  try {
+    const config = readFileSync(resolveCodexConfigPath(env), 'utf-8');
+    const escaped = serverName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`^\\s*\\[\\s*mcp_servers\\s*\\.\\s*(?:"${escaped}"|'${escaped}'|${escaped})\\s*\\]\\s*$`, 'm')
+      .test(config);
+  } catch {
+    return false;
+  }
+}
+
 function appendTeamWorkerMcpDisableOverrides(args: string[], env: NodeJS.ProcessEnv): void {
   if (!shouldDisableOmxMcpForTeamWorker(env)) return;
   for (const server of TEAM_WORKER_DISABLED_OMX_MCP_SERVERS) {
+    if (!codexConfigDeclaresMcpServer(server, env)) continue;
     const key = `mcp_servers.${server}.enabled`;
     if (hasConfigOverride(args, key)) continue;
     args.push(CONFIG_FLAG, `${key}=false`);
