@@ -5,7 +5,12 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import { injectExecFollowup } from "../exec/followup.js";
 import { isSessionStateUsable, readUsableSessionState, type SessionState } from "../hooks/session.js";
 import { readQuestionEvents } from "../question/events.js";
-import { listQuestionRecords, QuestionSubmitError, submitQuestionAnswerById } from "../question/state.js";
+import {
+  listQuestionRecords,
+  QuestionSubmitError,
+  submitQuestionAnswerById,
+  type InjectQuestionAnswersToPane,
+} from "../question/state.js";
 import type { QuestionAnswerEntry, QuestionRecord } from "../question/types.js";
 import {
   getAllSessionScopedStateDirs,
@@ -323,6 +328,7 @@ export async function hermesListQuestions(
 
 export async function hermesSubmitQuestionAnswer(
   args: Record<string, unknown>,
+  deps: { injectAnswersToPane?: InjectQuestionAnswersToPane } = {},
 ): Promise<HermesBridgeResult<{ question: HermesQuestionSummary; answers: QuestionAnswerEntry[] }>> {
   try {
     requireMutation(args);
@@ -332,6 +338,7 @@ export async function hermesSubmitQuestionAnswer(
     const payload = args.answers !== undefined ? { answers: args.answers } : { answer: args.answer };
     const { record } = await submitQuestionAnswerById(cwd, questionId, payload, {
       ...(sessionId ? { sessionId } : {}),
+      injectAnswersToPane: deps.injectAnswersToPane,
     });
     return jsonResult({ question: projectQuestion(record), answers: record.answers ?? [] });
   } catch (error) {

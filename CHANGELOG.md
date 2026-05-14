@@ -4,6 +4,59 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.17.2] - 2026-05-14
+
+Hotfix release for the `omx question` leader-pane resume regression observed after structured question / Hermes coordination integration.
+
+### Fixed
+
+- **Structured question answers resume the leader pane again** — answered question records with persisted renderer `return_target` metadata now send the bounded `[omx question answered]` notice back through the existing safe tmux-send-keys path for both local UI answers and Hermes/MCP structured submissions.
+- **Hermes question bridge contract clarified** — coordinators still submit bounded structured answers to question records, but OMX-owned records may use their persisted return-pane metadata for the leader resume notice; this is not an arbitrary terminal relay.
+
+### Validation
+
+- `npm run build`
+- `env -u OMX_STATE_ROOT -u OMX_ROOT -u OMX_SESSION_ID -u CODEX_SESSION_ID -u SESSION_ID node --test dist/question/__tests__/state.test.js dist/question/__tests__/ui.test.js dist/mcp/__tests__/hermes-bridge.test.js dist/question/__tests__/renderer.test.js`
+- `npm run check:no-unused`
+- `npx biome lint src/question src/mcp/hermes-bridge.ts`
+
+### Release metadata
+
+- Node and Cargo package metadata are bumped to `0.17.2` for the hotfix cut.
+- Release readiness evidence is tracked in `docs/qa/release-readiness-0.17.2.md`.
+- PR inventory: #2330.
+
+## [0.17.1] - 2026-05-14
+
+Patch release focused on post-`0.17.0` release readiness and runtime-coordination hardening: Team + Ultragoal handoff guidance, question bridge events, setup MCP removal confirmation, HUD/tmux resize ownership, Team startup readiness, native session overlay preservation, and audit-clean release metadata.
+
+### Added
+
+- **Team + Ultragoal bridge guidance** — planning, ralplan, Team, and Ultragoal now document leader-owned goal/ledger state with Team-owned parallel execution evidence.
+- **Question bridge events** — question coordination now records structured bridge events for bounded Hermes/MCP integrations.
+
+### Changed
+
+- **Approved execution handoff contract** — approved repository context replaces the older context-pack handoff path; approved PRD/test-spec artifacts and Team evidence are now the release-train source of truth.
+- **Setup MCP removal** — setup-managed MCP removal is explicitly confirmed instead of silently applying default removals.
+- **Lore commit guard** — compact compliant commit messages are accepted while preserving the required OmX co-author trailer.
+
+### Fixed
+
+- **Release audit and version metadata** — Node/Cargo metadata now align to `0.17.1`, and vulnerable transitive npm packages in the lockfile were updated so `npm audit --audit-level=high` is clean.
+- **Team startup reliability** — workers avoid redundant MCP startup, idle Ultragoal plans do not trigger accidental Team startup, and draft-only Team startup fails after ready timeout.
+- **HUD/tmux stability** — resize hooks enforce HUD pane height and avoid ownership collisions across windows.
+- **Native session overlays** — user-generated AGENTS guidance is preserved across native session replacement while generated project boilerplate is omitted.
+- **Ralph completion guidance** — examples now require auditable completion evidence before done-state claims.
+
+### PRs
+
+- #2287, #2290, #2292, #2296, #2301, #2303, #2304, #2305, #2306, #2312, #2319
+
+### Verification
+
+- Release readiness evidence is tracked in `docs/qa/release-readiness-0.17.1.md`.
+
 ## [0.17.0] - 2026-05-12
 
 Minor release focused on new coordination and workflow surfaces: bounded Hermes MCP coordination, canonical `$design` workflow guidance, plugin-mode skill marketplace exposure, adversarial UltraQA contracts, Windows native-hook reliability, tmux ownership safety, startup shell isolation, committed project-memory loading, and Ultragoal task-scoped goal reconciliation.

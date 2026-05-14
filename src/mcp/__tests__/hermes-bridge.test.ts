@@ -16,7 +16,7 @@ import {
   hermesSubmitQuestionAnswer,
   hermesStartSession,
 } from "../hermes-bridge.js";
-import { createQuestionRecord } from "../../question/state.js";
+import { createQuestionRecord, markQuestionPrompting } from "../../question/state.js";
 
 const originalRoots = process.env.OMX_MCP_WORKDIR_ROOTS;
 const originalOmxRoot = process.env.OMX_ROOT;
@@ -183,10 +183,10 @@ describe("Hermes MCP bridge core", () => {
     assert.equal(result.code, "mutation_not_allowed");
   });
 
-  it("lists question events and submits bounded answers without terminal input proxying", async () => {
+  it("lists question events and submits bounded answers with safe leader-pane resume injection", async () => {
     const cwd = await tempWorkspace("omx-hermes-questions-");
     try {
-      const { record } = await createQuestionRecord(cwd, {
+      const { record, recordPath } = await createQuestionRecord(cwd, {
         question: "Pick one",
         options: [{ label: "A", value: "a" }],
         allow_other: false,
@@ -196,6 +196,13 @@ describe("Hermes MCP bridge core", () => {
       }, "sess-q", new Date("2026-05-11T00:00:00.000Z"), {
         emitEvent: true,
         runId: "run-q",
+      });
+      await markQuestionPrompting(recordPath, {
+        renderer: "tmux-pane",
+        target: "%42",
+        launched_at: "2026-05-14T00:00:00.000Z",
+        return_target: "%11",
+        return_transport: "tmux-send-keys",
       });
 
       const listed = await hermesListQuestions({ workingDirectory: cwd, session_id: "sess-q" });
@@ -218,16 +225,26 @@ describe("Hermes MCP bridge core", () => {
       assert.equal(missingMutation.ok, false);
       assert.equal(missingMutation.code, "mutation_not_allowed");
 
-      const submitted = await hermesSubmitQuestionAnswer({
-        workingDirectory: cwd,
-        session_id: "sess-q",
-        question_id: record.question_id,
-        answer: { kind: "option", value: "a", selected_labels: ["A"], selected_values: ["a"] },
-        allow_mutation: true,
-      });
+      const injected: Array<{ paneId: string; value: string | string[] }> = [];
+      const submitted = await hermesSubmitQuestionAnswer(
+        {
+          workingDirectory: cwd,
+          session_id: "sess-q",
+          question_id: record.question_id,
+          answer: { kind: "option", value: "a", selected_labels: ["A"], selected_values: ["a"] },
+          allow_mutation: true,
+        },
+        {
+          injectAnswersToPane: (paneId, answers) => {
+            injected.push({ paneId, value: answers[0]!.answer.value });
+            return true;
+          },
+        },
+      );
       assert.equal(submitted.ok, true);
       assert.equal(submitted.data?.question.status, "answered");
       assert.equal(submitted.data?.answers[0]?.answer.value, "a");
+      assert.deepEqual(injected, [{ paneId: "%11", value: "a" }]);
       const answeredEvents = await hermesListQuestionEvents({ workingDirectory: cwd });
       assert.equal(answeredEvents.data?.events.find((event) => event.type === "question-answered")?.run_id, "run-q");
 

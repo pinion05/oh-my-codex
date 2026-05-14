@@ -458,7 +458,9 @@ export async function runQuestionUi(recordPath: string, deps: QuestionUiDeps = {
         ? await promptForAnswersWithArrows(record, { input, output })
         : await promptForAnswersWithNumbers(record, { input, output });
     }
-    await markQuestionAnswered(recordPath, answers);
+    await markQuestionAnswered(recordPath, answers, {
+      injectAnswersToPane: deps.injectAnswersToPane,
+    });
   } catch (error) {
     await markQuestionTerminalError(recordPath, 'error', 'question_ui_failed', error instanceof Error ? error.message : String(error));
     throw error;
