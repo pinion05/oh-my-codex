@@ -2600,6 +2600,14 @@ describe("detached tmux new-session sequencing", () => {
     );
   });
 
+  it("runCodex registers a HUD resize hook immediately for inside-tmux launches", async () => {
+    const source = await readFile(join(repoRoot, 'src', 'cli', 'index.ts'), 'utf-8');
+    assert.match(
+      source,
+      /registerHudResizeHook\(hudPaneId,\s*currentPaneId,\s*HUD_TMUX_HEIGHT_LINES\)/,
+    );
+  });
+
   it("buildDetachedSessionBootstrapSteps starts native Windows detached sessions with powershell", () => {
     const hudCmd = buildWindowsPromptCommand("node", [
       "omx.js",
