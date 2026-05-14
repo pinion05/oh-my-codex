@@ -4,7 +4,6 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
-
 ## [0.17.2] - 2026-05-14
 
 Hotfix release for the `omx question` leader-pane resume regression observed after structured question / Hermes coordination integration.
@@ -25,6 +24,37 @@ Hotfix release for the `omx question` leader-pane resume regression observed aft
 
 - Node and Cargo package metadata are bumped to `0.17.2` for the hotfix cut.
 - Release readiness evidence is tracked in `docs/qa/release-readiness-0.17.2.md`.
+
+## [0.17.1] - 2026-05-14
+
+Patch release focused on post-`0.17.0` release readiness and runtime-coordination hardening: Team + Ultragoal handoff guidance, question bridge events, setup MCP removal confirmation, HUD/tmux resize ownership, Team startup readiness, native session overlay preservation, and audit-clean release metadata.
+
+### Added
+
+- **Team + Ultragoal bridge guidance** — planning, ralplan, Team, and Ultragoal now document leader-owned goal/ledger state with Team-owned parallel execution evidence.
+- **Question bridge events** — question coordination now records structured bridge events for bounded Hermes/MCP integrations.
+
+### Changed
+
+- **Approved execution handoff contract** — approved repository context replaces the older context-pack handoff path; approved PRD/test-spec artifacts and Team evidence are now the release-train source of truth.
+- **Setup MCP removal** — setup-managed MCP removal is explicitly confirmed instead of silently applying default removals.
+- **Lore commit guard** — compact compliant commit messages are accepted while preserving the required OmX co-author trailer.
+
+### Fixed
+
+- **Release audit and version metadata** — Node/Cargo metadata now align to `0.17.1`, and vulnerable transitive npm packages in the lockfile were updated so `npm audit --audit-level=high` is clean.
+- **Team startup reliability** — workers avoid redundant MCP startup, idle Ultragoal plans do not trigger accidental Team startup, and draft-only Team startup fails after ready timeout.
+- **HUD/tmux stability** — resize hooks enforce HUD pane height and avoid ownership collisions across windows.
+- **Native session overlays** — user-generated AGENTS guidance is preserved across native session replacement while generated project boilerplate is omitted.
+- **Ralph completion guidance** — examples now require auditable completion evidence before done-state claims.
+
+### PRs
+
+- #2287, #2290, #2292, #2296, #2301, #2303, #2304, #2305, #2306, #2312, #2319
+
+### Verification
+
+- Release readiness evidence is tracked in `docs/qa/release-readiness-0.17.1.md`.
 
 ## [0.17.0] - 2026-05-12
 
