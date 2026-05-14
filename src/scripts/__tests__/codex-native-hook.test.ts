@@ -62,7 +62,10 @@ async function writeJson(path: string, value: unknown): Promise<void> {
   await writeFile(path, JSON.stringify(value, null, 2));
 }
 
-function buildWorkerStopFakeTmux(tmuxLogPath: string, options: { failSend?: boolean } = {}): string {
+function buildWorkerStopFakeTmux(
+  tmuxLogPath: string,
+  options: { failSend?: boolean; busyLeader?: boolean } = {},
+): string {
   return `#!/usr/bin/env bash
 set -eu
 echo "$@" >> "${tmuxLogPath}"
@@ -90,7 +93,7 @@ if [[ "$cmd" == "display-message" ]]; then
   exit 0
 fi
 if [[ "$cmd" == "capture-pane" ]]; then
-  echo "› ready"
+  ${options.busyLeader ? 'echo "• Working… (esc to interrupt)"' : 'echo "› ready"'}
   exit 0
 fi
 if [[ "$cmd" == "send-keys" ]]; then
@@ -5995,6 +5998,98 @@ exit 0
       assert.equal(stopNudges.length, 1, "allowed worker Stop should nudge leader exactly once inside cooldown");
       const nudgeState = JSON.parse(await readFile(join(workerDir, "worker-stop-nudge.json"), "utf-8"));
       assert.equal(nudgeState.delivery, "sent");
+    } finally {
+      if (typeof prevTeamWorker === "string") process.env.OMX_TEAM_WORKER = prevTeamWorker;
+      else delete process.env.OMX_TEAM_WORKER;
+      if (typeof prevTeamStateRoot === "string") process.env.OMX_TEAM_STATE_ROOT = prevTeamStateRoot;
+      else delete process.env.OMX_TEAM_STATE_ROOT;
+      if (typeof prevPath === "string") process.env.PATH = prevPath;
+      else delete process.env.PATH;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("queues worker Stop leader nudge with Tab and submit when leader pane is busy", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-team-worker-busy-leader-"));
+    const prevTeamWorker = process.env.OMX_TEAM_WORKER;
+    const prevTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+    const prevPath = process.env.PATH;
+    try {
+      await initTeamState(
+        "worker-stop-team-busy-leader",
+        "worker stop busy leader",
+        "executor",
+        1,
+        cwd,
+        undefined,
+        { ...process.env, OMX_SESSION_ID: "sess-stop-team-worker-busy-leader" },
+      );
+      const fakeBinDir = join(cwd, "fake-bin");
+      const tmuxLogPath = join(cwd, "tmux.log");
+      await mkdir(fakeBinDir, { recursive: true });
+      await writeFile(join(fakeBinDir, "tmux"), buildWorkerStopFakeTmux(tmuxLogPath, { busyLeader: true }));
+      await chmod(join(fakeBinDir, "tmux"), 0o755);
+      const stateDir = join(cwd, ".omx", "state");
+      const teamDir = join(stateDir, "team", "worker-stop-team-busy-leader");
+      const workerDir = join(teamDir, "workers", "worker-1");
+      await writeJson(join(teamDir, "config.json"), {
+        name: "worker-stop-team-busy-leader",
+        tmux_session: "omx-team-worker-stop",
+        leader_pane_id: "%42",
+        workers: [{ name: "worker-1", index: 1, pane_id: "%10" }],
+      });
+      await writeJson(join(teamDir, "manifest.v2.json"), {
+        name: "worker-stop-team-busy-leader",
+        tmux_session: "omx-team-worker-stop",
+        leader_pane_id: "%42",
+        workers: [{ name: "worker-1", index: 1, pane_id: "%10" }],
+      });
+      await writeJson(join(workerDir, "identity.json"), {
+        name: "worker-1",
+        index: 1,
+        role: "executor",
+        assigned_tasks: ["1"],
+        worktree_path: cwd,
+        team_state_root: stateDir,
+      });
+      await writeJson(join(workerDir, "status.json"), {
+        state: "done",
+        current_task_id: "1",
+        updated_at: new Date().toISOString(),
+      });
+      await writeJson(join(teamDir, "tasks", "task-1.json"), {
+        id: "1",
+        subject: "hook task",
+        description: "finish hook task",
+        status: "completed",
+        owner: "worker-1",
+        created_at: new Date().toISOString(),
+      });
+
+      process.env.OMX_TEAM_WORKER = "worker-stop-team-busy-leader/worker-1";
+      process.env.OMX_TEAM_STATE_ROOT = stateDir;
+      process.env.PATH = `${fakeBinDir}:${prevPath || ""}`;
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "sess-stop-team-worker-busy-leader",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.outputJson, null);
+      const tmuxLog = await readFile(tmuxLogPath, "utf-8");
+      assert.match(tmuxLog, /send-keys -t %42 -l \[OMX\] worker-1 native Stop allowed/);
+      assert.match(tmuxLog, /send-keys -t %42 Tab/);
+      assert.match(tmuxLog, /send-keys -t %42 C-m/);
+      assert.ok(
+        tmuxLog.indexOf("send-keys -t %42 Tab") < tmuxLog.indexOf("send-keys -t %42 C-m"),
+        "busy worker-stop nudge should press Tab before C-m",
+      );
+      const nudgeState = JSON.parse(await readFile(join(workerDir, "worker-stop-nudge.json"), "utf-8"));
+      assert.equal(nudgeState.delivery, "queued");
     } finally {
       if (typeof prevTeamWorker === "string") process.env.OMX_TEAM_WORKER = prevTeamWorker;
       else delete process.env.OMX_TEAM_WORKER;
