@@ -164,7 +164,7 @@ describe('omx ask', () => {
       await mkdir(fakeBin, { recursive: true });
       await writeFile(
         join(fakeBin, 'claude'),
-        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "fake-claude"; exit 0; fi\nif [ "$1" = "-p" ]; then echo "NONROOT_DEFAULT_OK"; exit 0; fi\necho "unexpected" 1>&2\nexit 3\n',
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "fake-claude"; exit 0; fi\nif [ "$1" = "-p" ] && [ "$2" = "--" ]; then echo "NONROOT_DEFAULT_OK:$3"; exit 0; fi\necho "unexpected" 1>&2\nexit 3\n',
       );
       await chmod(join(fakeBin, 'claude'), 0o755);
 
@@ -192,7 +192,7 @@ describe('omx ask', () => {
 
       await writeFile(
         join(fakeBin, 'claude'),
-        '#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"fake-claude\"; exit 0; fi\nif [ \"$1\" = \"-p\" ]; then echo \"CLAUDE_PRINT_OK:$2\"; exit 0; fi\necho \"unexpected\" 1>&2\nexit 3\n',
+        '#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"fake-claude\"; exit 0; fi\nif [ \"$1\" = \"-p\" ] && [ \"$2\" = \"--\" ]; then echo \"CLAUDE_PRINT_OK:$3\"; exit 0; fi\necho \"unexpected\" 1>&2\nexit 3\n',
       );
       await chmod(join(fakeBin, 'claude'), 0o755);
 
@@ -242,13 +242,13 @@ describe('omx ask', () => {
       assert.equal(issueRes.status, 0, issueRes.stderr || issueRes.stdout);
       const issueArtifactPath = issueRes.stdout.trim();
       const issueArtifact = await readFile(issueArtifactPath, 'utf-8');
-      assert.match(issueArtifact, /CLAUDE_ARGS:--dangerously-skip-permissions -p Investigate issue #1536 and summarize it/);
+      assert.match(issueArtifact, /CLAUDE_ARGS:--dangerously-skip-permissions -p -- Investigate issue #1536 and summarize it/);
 
       const genericRes = runOmx(wd, ['ask', 'claude', 'Summarize the README'], env);
       assert.equal(genericRes.status, 0, genericRes.stderr || genericRes.stdout);
       const genericArtifactPath = genericRes.stdout.trim();
       const genericArtifact = await readFile(genericArtifactPath, 'utf-8');
-      assert.match(genericArtifact, /CLAUDE_ARGS:-p Summarize the README/);
+      assert.match(genericArtifact, /CLAUDE_ARGS:-p -- Summarize the README/);
       assert.doesNotMatch(genericArtifact, /--dangerously-skip-permissions/);
     } finally {
       await rm(wd, { recursive: true, force: true });
@@ -271,7 +271,7 @@ describe('omx ask', () => {
 
       await writeFile(
         join(fakeBin, 'claude'),
-        '#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"fake-claude\"; exit 0; fi\nif [ \"$1\" = \"-p\" ]; then echo \"CLAUDE_FINAL_PROMPT:$2\"; exit 0; fi\necho \"unexpected\" 1>&2\nexit 3\n',
+        '#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"fake-claude\"; exit 0; fi\nif [ \"$1\" = \"-p\" ] && [ \"$2\" = \"--\" ]; then echo \"CLAUDE_FINAL_PROMPT:$3\"; exit 0; fi\necho \"unexpected\" 1>&2\nexit 3\n',
       );
       await chmod(join(fakeBin, 'claude'), 0o755);
 
@@ -290,6 +290,112 @@ describe('omx ask', () => {
       assert.match(artifact, /## Final prompt[\s\S]*Follow strict verification rules\./);
       assert.match(artifact, /## Final prompt[\s\S]*ship feature/);
       assert.match(artifact, /CLAUDE_FINAL_PROMPT:/);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('separates Claude frontmatter agent prompts from CLI options', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-ask-agent-prompt-frontmatter-'));
+    try {
+      const fakeBin = join(wd, 'bin');
+      const codexHome = join(wd, '.codex-home');
+      const promptsDir = join(codexHome, 'prompts');
+      await mkdir(fakeBin, { recursive: true });
+      await mkdir(promptsDir, { recursive: true });
+
+      await writeFile(
+        join(promptsDir, 'executor.md'),
+        '---\nname: executor\ndescription: test role\n---\n\nYou are Executor.',
+      );
+
+      await writeFile(
+        join(fakeBin, 'claude'),
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "fake-claude"; exit 0; fi\nif [ "$1" = "-p" ] && [ "$2" = "--" ]; then printf "CLAUDE_FRONTMATTER_OK:%s" "$3"; exit 0; fi\nif [ "$2" = "---" ]; then echo "unknown option \'---\'" 1>&2; exit 2; fi\necho "unexpected args:$*" 1>&2\nexit 3\n',
+      );
+      await chmod(join(fakeBin, 'claude'), 0o755);
+
+      const res = runOmx(
+        wd,
+        ['ask', 'claude', '--agent-prompt', 'executor', 'ship', 'feature'],
+        { PATH: `${fakeBin}:${process.env.PATH || ''}`, CODEX_HOME: codexHome },
+      );
+      if (shouldSkipForSpawnPermissions(res.error)) return;
+
+      assert.equal(res.status, 0, res.stderr || res.stdout);
+      const artifact = await readFile(res.stdout.trim(), 'utf-8');
+      assert.match(artifact, /CLAUDE_FRONTMATTER_OK:---/);
+      assert.match(artifact, /## Final prompt[\s\S]*name: executor/);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps Gemini frontmatter prompts on its existing -p value path', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-ask-gemini-frontmatter-'));
+    try {
+      const fakeBin = join(wd, 'bin');
+      const codexHome = join(wd, '.codex-home');
+      const promptsDir = join(codexHome, 'prompts');
+      await mkdir(fakeBin, { recursive: true });
+      await mkdir(promptsDir, { recursive: true });
+
+      await writeFile(
+        join(promptsDir, 'planner.md'),
+        '---\nname: planner\n---\n\nYou are Planner.',
+      );
+
+      await writeFile(
+        join(fakeBin, 'gemini'),
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "fake-gemini"; exit 0; fi\nif [ "$1" = "-p" ] && [ "$2" != "--" ]; then printf "GEMINI_FRONTMATTER_OK:%s" "$2"; exit 0; fi\necho "unexpected args:$*" 1>&2\nexit 4\n',
+      );
+      await chmod(join(fakeBin, 'gemini'), 0o755);
+
+      const res = runOmx(
+        wd,
+        ['ask', 'gemini', '--agent-prompt', 'planner', 'plan', 'feature'],
+        { PATH: `${fakeBin}:${process.env.PATH || ''}`, CODEX_HOME: codexHome },
+      );
+      if (shouldSkipForSpawnPermissions(res.error)) return;
+
+      assert.equal(res.status, 0, res.stderr || res.stdout);
+      const artifact = await readFile(res.stdout.trim(), 'utf-8');
+      assert.match(artifact, /GEMINI_FRONTMATTER_OK:---/);
+    } finally {
+      await rm(wd, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps Claude permissions bypass before the separator for frontmatter issue prompts', async () => {
+    const wd = await mkdtemp(join(tmpdir(), 'omx-ask-agent-prompt-frontmatter-bypass-'));
+    try {
+      const fakeBin = join(wd, 'bin');
+      const codexHome = join(wd, '.codex-home');
+      const promptsDir = join(codexHome, 'prompts');
+      await mkdir(fakeBin, { recursive: true });
+      await mkdir(promptsDir, { recursive: true });
+
+      await writeFile(
+        join(promptsDir, 'executor.md'),
+        '---\nname: executor\n---\n\nYou are Executor.',
+      );
+
+      await writeFile(
+        join(fakeBin, 'claude'),
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "fake-claude"; exit 0; fi\nif [ "$1" = "--dangerously-skip-permissions" ] && [ "$2" = "-p" ] && [ "$3" = "--" ]; then printf "CLAUDE_BYPASS_FRONTMATTER_OK:%s" "$4"; exit 0; fi\necho "unexpected args:$*" 1>&2\nexit 3\n',
+      );
+      await chmod(join(fakeBin, 'claude'), 0o755);
+
+      const res = runOmx(
+        wd,
+        ['ask', 'claude', '--agent-prompt', 'executor', 'Investigate issue #2337'],
+        { PATH: `${fakeBin}:${process.env.PATH || ''}`, CODEX_HOME: codexHome },
+      );
+      if (shouldSkipForSpawnPermissions(res.error)) return;
+
+      assert.equal(res.status, 0, res.stderr || res.stdout);
+      const artifact = await readFile(res.stdout.trim(), 'utf-8');
+      assert.match(artifact, /CLAUDE_BYPASS_FRONTMATTER_OK:---/);
     } finally {
       await rm(wd, { recursive: true, force: true });
     }

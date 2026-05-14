@@ -83,6 +83,16 @@ function shouldUseClaudeIssuePermissionsBypass(provider: string, prompt: string)
   return ISSUE_WORK_PROMPT_PATTERNS.some((pattern) => pattern.test(trimmed));
 }
 
+function buildProviderLaunchArgs(provider: string, prompt: string, originalTask: string): string[] {
+  const promptArgs = provider === 'claude'
+    ? ['-p', '--', prompt]
+    : ['-p', prompt];
+
+  return shouldUseClaudeIssuePermissionsBypass(provider, originalTask)
+    ? [CLAUDE_SKIP_PERMISSIONS_FLAG, ...promptArgs]
+    : promptArgs;
+}
+
 function buildSummary(exitCode: number, output: string): string {
   if (exitCode === 0) {
     return 'Provider completed successfully. Review the raw output for details.';
@@ -165,9 +175,7 @@ async function main(): Promise<void> {
 
   ensureBinary(binary);
 
-  const launchArgs = shouldUseClaudeIssuePermissionsBypass(provider, originalTask)
-    ? [CLAUDE_SKIP_PERMISSIONS_FLAG, '-p', prompt]
-    : ['-p', prompt];
+  const launchArgs = buildProviderLaunchArgs(provider, prompt, originalTask);
 
   const run = spawnSync(binary, launchArgs, {
     encoding: 'utf8',
