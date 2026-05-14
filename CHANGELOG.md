@@ -4,6 +4,27 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.17.3] - 2026-05-14
+
+### Highlights
+
+- **Team launch works again with CLI-first/plugin Codex configs** — Codex team workers no longer synthesize first-party `mcp_servers.<omx>` config tables when those servers are absent from `CODEX_HOME/config.toml`, avoiding Codex's `invalid transport` startup failure while preserving the v0.17.1 worker-isolation behavior for legacy configured servers.
+- **AGENTS contract and plugin metadata hardening ride with the hotfix train** — the compare range also includes AGENTS overwrite protection and plugin/question test metadata alignment from `dev` after `0.17.2`.
+
+### Fixes / compatibility
+
+- `OMX_TEAM_WORKER_MCP_COMPAT=1` remains a supported escape hatch and still suppresses worker MCP disable overrides.
+- Legacy configs that explicitly declare `omx_state`, `omx_memory`, `omx_code_intel`, `omx_trace`, `omx_wiki`, or `omx_hermes` still get those servers disabled for Codex team workers by default.
+- CLI-first/plugin configs without those first-party MCP tables now launch team workers normally instead of failing before readiness.
+
+### Validation
+
+- `npm run build`
+- `node --test dist/team/__tests__/tmux-session.test.js`
+- `npm run check:no-unused`
+- Live default team launch smoke: `./dist/cli/omx.js team 1:explore "default smoke launch fixed"`
+- Live compatibility smoke: `OMX_TEAM_WORKER_MCP_COMPAT=1 ./dist/cli/omx.js team 1:explore "compat smoke launch still fixed"`
+
 ## [0.17.2] - 2026-05-14
 
 Hotfix release for the `omx question` leader-pane resume regression observed after structured question / Hermes coordination integration.
