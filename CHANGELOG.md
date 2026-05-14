@@ -24,6 +24,7 @@ Hotfix release for the `omx question` leader-pane resume regression observed aft
 
 - Node and Cargo package metadata are bumped to `0.17.2` for the hotfix cut.
 - Release readiness evidence is tracked in `docs/qa/release-readiness-0.17.2.md`.
+- PR inventory: #2330.
 
 ## [0.17.1] - 2026-05-14
 

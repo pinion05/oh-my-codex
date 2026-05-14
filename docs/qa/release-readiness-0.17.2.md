@@ -14,7 +14,7 @@ Note: local `dev` and `main` release commits should be reconciled before final t
 
 ## PR inventory
 
-- Pending hotfix PR: restore safe return-pane resume injection for `omx question` structured answer paths.
+- PR #2330 — restore safe return-pane resume injection for `omx question` structured answer paths.
 
 ## Local gates
 

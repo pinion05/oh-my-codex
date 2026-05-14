@@ -15,7 +15,7 @@
 
 ## Merged PR inventory
 
-- Pending hotfix PR: restore safe `omx question` answer resume injection for structured/Hermes paths.
+- PR #2330 — restore safe `omx question` answer resume injection for structured/Hermes paths.
 
 ## Validation evidence
 
