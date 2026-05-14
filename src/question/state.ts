@@ -5,6 +5,7 @@ import { getStateDir } from '../mcp/state-paths.js';
 import { writeAtomic } from '../team/state.js';
 import { sleep } from '../utils/sleep.js';
 import { appendQuestionAnsweredEventOnce, appendQuestionEvent, normalizeSubmittedAnswers, resolveQuestionRunId } from './events.js';
+import { injectQuestionAnswersToPane as defaultInjectQuestionAnswersToPane } from './renderer.js';
 import { getNormalizedQuestionType, isMultiAnswerableQuestion, normalizeQuestionInput } from './types.js';
 import type {
   NormalizedQuestionItem,
@@ -20,6 +21,11 @@ const QUESTION_NAMESPACE = 'questions';
 const DEFAULT_POLL_INTERVAL_MS = 100;
 const QUESTION_SUBMIT_LOCK_STALE_MS = 30_000;
 const QUESTION_SUBMIT_LOCK_TIMEOUT_MS = 10_000;
+
+export type InjectQuestionAnswersToPane = (
+  paneId: string,
+  answers: QuestionAnswerEntry[],
+) => boolean;
 
 export type QuestionSubmitFailureCode =
   | 'question_unknown'
@@ -127,8 +133,9 @@ export async function markQuestionPrompting(
 export async function markQuestionAnswered(
   recordPath: string,
   answerOrAnswers: QuestionAnswer | QuestionAnswerEntry[],
+  options: { injectAnswersToPane?: InjectQuestionAnswersToPane } = {},
 ): Promise<QuestionRecord> {
-  return updateQuestionRecord(recordPath, (record) => {
+  const updated = await updateQuestionRecord(recordPath, (record) => {
     const answers = Array.isArray(answerOrAnswers)
       ? answerOrAnswers
       : [{ question_id: record.questions?.[0]?.id ?? 'q-1', index: 0, answer: answerOrAnswers }];
@@ -142,6 +149,19 @@ export async function markQuestionAnswered(
       error: undefined,
     };
   });
+  maybeInjectQuestionAnswersToReturnPane(updated, options.injectAnswersToPane);
+  return updated;
+}
+
+function maybeInjectQuestionAnswersToReturnPane(
+  record: QuestionRecord,
+  injectAnswersToPane: InjectQuestionAnswersToPane = defaultInjectQuestionAnswersToPane,
+): boolean {
+  const returnTarget = record.renderer?.return_target;
+  if (record.renderer?.return_transport !== 'tmux-send-keys') return false;
+  if (typeof returnTarget !== 'string' || !/^%\d+$/.test(returnTarget.trim())) return false;
+  if (!record.answers?.length) return false;
+  return injectAnswersToPane(returnTarget.trim(), record.answers);
 }
 
 function isValidQuestionId(questionId: string): boolean {
@@ -376,7 +396,7 @@ export async function submitQuestionAnswerById(
   cwd: string,
   questionId: string,
   answerPayload: unknown,
-  options: { sessionId?: string; runId?: string } = {},
+  options: { sessionId?: string; runId?: string; injectAnswersToPane?: InjectQuestionAnswersToPane } = {},
 ): Promise<{ recordPath: string; record: QuestionRecord }> {
   const normalizedQuestionId = questionId.trim();
   if (!isValidQuestionId(normalizedQuestionId)) {
@@ -401,7 +421,9 @@ export async function submitQuestionAnswerById(
     } catch (error) {
       throw new QuestionSubmitError('question_invalid_answer', error instanceof Error ? error.message : String(error));
     }
-    const record = await markQuestionAnswered(recordPath, answers);
+    const record = await markQuestionAnswered(recordPath, answers, {
+      injectAnswersToPane: options.injectAnswersToPane,
+    });
     await appendQuestionAnsweredEventOnce(cwd, record, { recordPath, runId: options.runId });
     return { recordPath, record };
   });

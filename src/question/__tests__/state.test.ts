@@ -479,4 +479,80 @@ describe('question state', () => {
     assert.equal(loaded?.answer?.value, 'a');
     assert.equal(loaded?.renderer?.return_target, '%11');
   });
+
+  it('injects answered text to the persisted renderer return pane', async () => {
+    const cwd = await makeRepo();
+    const { recordPath } = await createQuestionRecord(cwd, {
+      question: 'Pick one',
+      options: [{ label: 'A', value: 'a' }],
+      allow_other: false,
+      other_label: 'Other',
+      multi_select: false,
+    }, 'sess-inject');
+    await markQuestionPrompting(recordPath, {
+      renderer: 'tmux-pane',
+      target: '%42',
+      launched_at: '2026-05-14T00:00:00.000Z',
+      return_target: '%11',
+      return_transport: 'tmux-send-keys',
+    });
+
+    const injected: Array<{ paneId: string; values: Array<string | string[]> }> = [];
+    const record = await markQuestionAnswered(
+      recordPath,
+      {
+        kind: 'option',
+        value: 'a',
+        selected_labels: ['A'],
+        selected_values: ['a'],
+      },
+      {
+        injectAnswersToPane: (paneId, answers) => {
+          injected.push({ paneId, values: answers.map((entry) => entry.answer.value) });
+          return true;
+        },
+      },
+    );
+
+    assert.equal(record.status, 'answered');
+    assert.deepEqual(injected, [{ paneId: '%11', values: ['a'] }]);
+  });
+
+  it('skips return-pane injection when renderer metadata has no valid tmux return target', async () => {
+    const cwd = await makeRepo();
+    const { recordPath } = await createQuestionRecord(cwd, {
+      question: 'Pick one',
+      options: [{ label: 'A', value: 'a' }],
+      allow_other: false,
+      other_label: 'Other',
+      multi_select: false,
+    }, 'sess-no-inject');
+    await markQuestionPrompting(recordPath, {
+      renderer: 'tmux-pane',
+      target: '%42',
+      launched_at: '2026-05-14T00:00:00.000Z',
+      return_target: 'not-a-pane',
+      return_transport: 'tmux-send-keys',
+    });
+
+    let injected = false;
+    const record = await markQuestionAnswered(
+      recordPath,
+      {
+        kind: 'option',
+        value: 'a',
+        selected_labels: ['A'],
+        selected_values: ['a'],
+      },
+      {
+        injectAnswersToPane: () => {
+          injected = true;
+          return true;
+        },
+      },
+    );
+
+    assert.equal(record.status, 'answered');
+    assert.equal(injected, false);
+  });
 });

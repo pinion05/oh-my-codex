@@ -275,7 +275,7 @@ describe('question ui arrow navigation', () => {
     }
   });
 
-  it('answers by writing record state only when renderer metadata races the UI answer', async () => {
+  it('answers and injects through persisted renderer metadata when it races the UI answer', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-question-ui-stale-record-'));
     try {
       const { recordPath } = await createQuestionRecord(
@@ -321,7 +321,7 @@ describe('question ui arrow navigation', () => {
       }, 25);
 
       await runPromise;
-      assert.deepEqual(injected, []);
+      assert.deepEqual(injected, [{ paneId: '%11', value: 'b' }]);
       const loaded = await readQuestionRecord(recordPath);
       assert.equal(loaded?.status, 'answered');
       assert.equal(loaded?.renderer?.return_target, '%11');
@@ -492,7 +492,7 @@ describe('question ui batch wizard', () => {
     }
   });
 
-  it('persists every batch answer without return-pane injection', async () => {
+  it('persists every batch answer and injects through return-pane metadata', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-question-ui-batch-inject-'));
     try {
       const { recordPath } = await createQuestionRecord(
@@ -534,7 +534,7 @@ describe('question ui batch wizard', () => {
       }, 25);
 
       await runPromise;
-      assert.deepEqual(injected, []);
+      assert.deepEqual(injected, [{ paneId: '%11', values: ['a', 'd'] }]);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

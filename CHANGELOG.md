@@ -4,6 +4,28 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+
+## [0.17.2] - 2026-05-14
+
+Hotfix release for the `omx question` leader-pane resume regression observed after structured question / Hermes coordination integration.
+
+### Fixed
+
+- **Structured question answers resume the leader pane again** — answered question records with persisted renderer `return_target` metadata now send the bounded `[omx question answered]` notice back through the existing safe tmux-send-keys path for both local UI answers and Hermes/MCP structured submissions.
+- **Hermes question bridge contract clarified** — coordinators still submit bounded structured answers to question records, but OMX-owned records may use their persisted return-pane metadata for the leader resume notice; this is not an arbitrary terminal relay.
+
+### Validation
+
+- `npm run build`
+- `env -u OMX_STATE_ROOT -u OMX_ROOT -u OMX_SESSION_ID -u CODEX_SESSION_ID -u SESSION_ID node --test dist/question/__tests__/state.test.js dist/question/__tests__/ui.test.js dist/mcp/__tests__/hermes-bridge.test.js dist/question/__tests__/renderer.test.js`
+- `npm run check:no-unused`
+- `npx biome lint src/question src/mcp/hermes-bridge.ts`
+
+### Release metadata
+
+- Node and Cargo package metadata are bumped to `0.17.2` for the hotfix cut.
+- Release readiness evidence is tracked in `docs/qa/release-readiness-0.17.2.md`.
+
 ## [0.17.0] - 2026-05-12
 
 Minor release focused on new coordination and workflow surfaces: bounded Hermes MCP coordination, canonical `$design` workflow guidance, plugin-mode skill marketplace exposure, adversarial UltraQA contracts, Windows native-hook reliability, tmux ownership safety, startup shell isolation, committed project-memory loading, and Ultragoal task-scoped goal reconciliation.
