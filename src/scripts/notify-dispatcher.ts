@@ -52,6 +52,21 @@ function resolveNotifyEntrypoint(command: readonly string[]): string | undefined
 	return command.slice(1).find((arg) => !arg.startsWith("-"));
 }
 
+function getPreviousNotifyWrapperValue(
+	command: readonly string[],
+): string | undefined {
+	for (let index = 0; index < command.length; index += 1) {
+		const part = command[index];
+		if (part === "--previous-notify") {
+			return command[index + 1];
+		}
+		if (part.startsWith("--previous-notify=")) {
+			return part.slice("--previous-notify=".length);
+		}
+	}
+	return undefined;
+}
+
 function isOmxManagedNotifyCommand(command: readonly string[] | null | undefined): boolean {
 	if (!command) return false;
 	const entrypoint = resolveNotifyEntrypoint(command);
@@ -62,12 +77,40 @@ function isOmxManagedNotifyCommand(command: readonly string[] | null | undefined
 	return /(?:^|[\\/])oh-my-codex(?:[\\/]|$)/.test(entrypoint);
 }
 
+function isOmxManagedPreviousNotifyWrapper(
+	command: readonly string[] | null | undefined,
+): boolean {
+	if (!command) return false;
+	if (!command.some((part) => part === "turn-ended")) return false;
+	const previousNotify = getPreviousNotifyWrapperValue(command);
+	if (!previousNotify) return false;
+
+	try {
+		const parsed = JSON.parse(previousNotify) as unknown;
+		if (
+			Array.isArray(parsed) &&
+			parsed.every((item) => typeof item === "string")
+		) {
+			return isOmxManagedNotifyCommand(parsed);
+		}
+	} catch {
+		// Fall back to a conservative text match for legacy wrapper payloads.
+	}
+
+	return (
+		/(?:^|[\\/])notify-(?:hook|dispatcher)\.js(?:\s|$|["'])/.test(
+			previousNotify,
+		) && /(?:^|[\\/])oh-my-codex(?:[\\/]|$)/.test(previousNotify)
+	);
+}
+
 function isManagedPreviousNotify(
 	previousNotify: readonly string[] | null | undefined,
 	metadata: NotifyDispatcherMetadata | null,
 ): boolean {
 	return (
 		isOmxManagedNotifyCommand(previousNotify) ||
+		isOmxManagedPreviousNotifyWrapper(previousNotify) ||
 		sameCommand(previousNotify, metadata?.omxNotify) ||
 		sameCommand(previousNotify, metadata?.dispatcherNotify)
 	);

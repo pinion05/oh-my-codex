@@ -91,6 +91,92 @@ describe("notify dispatcher previousNotify guard", () => {
 		}
 	});
 
+	it("skips stale turn-ended wrappers whose previousNotify is an OMX dispatcher", () => {
+		const wd = mkdtempSync(join(tmpdir(), "omx-notify-dispatcher-wrapper-"));
+		try {
+			const oldPkgScripts = join(wd, "global", "oh-my-codex", "dist", "scripts");
+			mkdirSync(oldPkgScripts, { recursive: true });
+			const stalePreviousMarker = join(wd, "stale-wrapper-ran");
+			const omxMarker = join(wd, "omx-ran");
+			const staleDispatcher = join(oldPkgScripts, "notify-dispatcher.js");
+			const turnEndedWrapper = join(wd, "SkyComputerUseClient");
+			const omxHook = join(wd, "current-notify-hook.js");
+			writeFileSync(
+				turnEndedWrapper,
+				`import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(stalePreviousMarker)}, "ran");\n`,
+			);
+			writeFileSync(omxHook, `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(omxMarker)}, "ran");\n`);
+			const metadataPath = join(wd, "notify-dispatch.json");
+			writeFileSync(
+				metadataPath,
+				JSON.stringify({
+					managedBy: "oh-my-codex",
+					version: 1,
+					previousNotify: [
+						process.execPath,
+						turnEndedWrapper,
+						"turn-ended",
+						"--previous-notify",
+						JSON.stringify([
+							process.execPath,
+							staleDispatcher,
+							"--metadata",
+							metadataPath,
+						]),
+					],
+					omxNotify: [process.execPath, omxHook],
+				}),
+			);
+
+			runDispatcher(metadataPath);
+
+			assert.equal(existsSync(stalePreviousMarker), false);
+			assert.equal(readFileSync(omxMarker, "utf-8"), "ran");
+		} finally {
+			rmSync(wd, { recursive: true, force: true });
+		}
+	});
+
+	it("skips stale turn-ended wrappers whose previousNotify text is an OMX hook", () => {
+		const wd = mkdtempSync(join(tmpdir(), "omx-notify-dispatcher-wrapper-text-"));
+		try {
+			const oldPkgScripts = join(wd, "global", "oh-my-codex", "dist", "scripts");
+			mkdirSync(oldPkgScripts, { recursive: true });
+			const stalePreviousMarker = join(wd, "stale-wrapper-ran");
+			const omxMarker = join(wd, "omx-ran");
+			const staleHook = join(oldPkgScripts, "notify-hook.js");
+			const turnEndedWrapper = join(wd, "SkyComputerUseClient");
+			const omxHook = join(wd, "current-notify-hook.js");
+			writeFileSync(
+				turnEndedWrapper,
+				`import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(stalePreviousMarker)}, "ran");\n`,
+			);
+			writeFileSync(omxHook, `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(omxMarker)}, "ran");\n`);
+			const metadataPath = join(wd, "notify-dispatch.json");
+			writeFileSync(
+				metadataPath,
+				JSON.stringify({
+					managedBy: "oh-my-codex",
+					version: 1,
+					previousNotify: [
+						process.execPath,
+						turnEndedWrapper,
+						"turn-ended",
+						`--previous-notify=node ${staleHook}`,
+					],
+					omxNotify: [process.execPath, omxHook],
+				}),
+			);
+
+			runDispatcher(metadataPath);
+
+			assert.equal(existsSync(stalePreviousMarker), false);
+			assert.equal(readFileSync(omxMarker, "utf-8"), "ran");
+		} finally {
+			rmSync(wd, { recursive: true, force: true });
+		}
+	});
+
 	it("preserves and runs real user previousNotify entries", () => {
 		const wd = mkdtempSync(join(tmpdir(), "omx-notify-dispatcher-user-"));
 		try {
