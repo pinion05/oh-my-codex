@@ -182,6 +182,48 @@ export async function sendPaneInput({
   }
 }
 
+export async function queuePaneInput({
+  paneTarget,
+  prompt,
+  submitDelayMs = 80,
+}: any): Promise<any> {
+  const sendResult = await sendPaneInput({
+    paneTarget,
+    prompt,
+    submitKeyPresses: 0,
+  });
+  if (!sendResult.ok) return sendResult;
+
+  const target = safeString(paneTarget).trim();
+  const submitArgv = [
+    ['send-keys', '-t', target, 'Tab'],
+    ['send-keys', '-t', target, 'C-m'],
+  ];
+  try {
+    await runProcess('tmux', submitArgv[0], 3000);
+    if (submitDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, submitDelayMs));
+    }
+    await runProcess('tmux', submitArgv[1], 3000);
+    return {
+      ok: true,
+      sent: true,
+      reason: 'queued',
+      paneTarget: target,
+      argv: { typeArgv: sendResult.argv?.typeArgv || null, submitArgv },
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      sent: false,
+      reason: 'queue_failed',
+      paneTarget: target,
+      argv: { typeArgv: sendResult.argv?.typeArgv || null, submitArgv },
+      error: error instanceof Error ? error.message : safeString(error),
+    };
+  }
+}
+
 export async function checkPaneReadyForTeamSendKeys(paneTarget: any): Promise<any> {
   return evaluatePaneInjectionReadiness(paneTarget);
 }

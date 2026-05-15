@@ -1011,6 +1011,12 @@ exit 0
       assert.match(tmuxLog, /display-message -p -t %93 #\{pane_in_mode\}/);
       assert.match(tmuxLog, /capture-pane -t %93 -p -S -80/);
       assert.match(tmuxLog, /send-keys -t %93 -l .*Team busy-live-pane:/);
+      assert.match(tmuxLog, /send-keys -t %93 Tab/);
+      assert.match(tmuxLog, /send-keys -t %93 C-m/);
+      assert.ok(
+        tmuxLog.indexOf('send-keys -t %93 Tab') < tmuxLog.indexOf('send-keys -t %93 C-m'),
+        'busy leader queue path should press Tab before C-m',
+      );
       assert.match(tmuxLog, /\[OMX_TMUX_INJECT\]/, 'should keep the injection marker on busy-pane sends');
 
       const eventsPath = join(teamDir, 'events', 'events.ndjson');
@@ -1405,6 +1411,12 @@ exit 0
       const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
       assert.match(tmuxLog, /capture-pane/);
       assert.match(tmuxLog, /send-keys -t %73/, 'should inject into a busy leader pane so Codex can queue the message');
+      assert.match(tmuxLog, /send-keys -t %73 Tab/);
+      assert.match(tmuxLog, /send-keys -t %73 C-m/);
+      assert.ok(
+        tmuxLog.indexOf('send-keys -t %73 Tab') < tmuxLog.indexOf('send-keys -t %73 C-m'),
+        'busy leader queue path should press Tab before C-m',
+      );
 
       const eventsPath = join(teamDir, 'events', 'events.ndjson');
       if (existsSync(eventsPath)) {
