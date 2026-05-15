@@ -109,6 +109,13 @@
       "internalRequired": false
     },
     {
+      "name": "best-practice-research",
+      "category": "planning",
+      "status": "active",
+      "core": false,
+      "internalRequired": false
+    },
+    {
       "name": "analyze",
       "category": "shortcut",
       "status": "active",

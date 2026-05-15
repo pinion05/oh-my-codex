@@ -1,10 +1,10 @@
 {
-  "generatedAt": "2026-05-11T07:38:27.080Z",
+  "generatedAt": "2026-05-12T05:44:35.138Z",
   "version": "2026.02.28.1",
   "counts": {
-    "skillCount": 47,
+    "skillCount": 48,
     "promptCount": 30,
-    "activeSkillCount": 25,
+    "activeSkillCount": 26,
     "activeAgentCount": 16
   },
   "coreSkills": [
@@ -117,6 +117,13 @@
     },
     {
       "name": "deep-interview",
+      "category": "planning",
+      "status": "active",
+      "core": false,
+      "internalRequired": false
+    },
+    {
+      "name": "best-practice-research",
       "category": "planning",
       "status": "active",
       "core": false,

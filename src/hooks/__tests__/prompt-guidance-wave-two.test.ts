@@ -28,6 +28,8 @@ describe('prompt guidance wave two contract', () => {
     assert.match(researcher, /documentation structure before page-level fetches/i);
     assert.match(researcher, /examples only after the docs baseline is grounded/i);
     assert.match(researcher, /source-reference evidence/i);
+    assert.match(researcher, /Current best-practice research/i);
+    assert.match(researcher, /official\/upstream recommendations/i);
   });
 
   it('research specialists keep explicit output-contract fixtures for source preference and boundary discipline', () => {
@@ -38,6 +40,8 @@ describe('prompt guidance wave two contract', () => {
     assert.match(researcher, /Always include source URLs/i);
     assert.match(researcher, /Prefer official documentation.*over third-party summaries/i);
     assert.match(researcher, /Version compatibility or version uncertainty is noted when relevant|### Version Note/i);
+    assert.match(researcher, /version\/date certainty or uncertainty/i);
+    assert.match(researcher, /supplemental third-party evidence/i);
     assert.match(researcher, /already chosen technology/i);
     assert.match(researcher, /not the default dependency-comparison role/i);
 
