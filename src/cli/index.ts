@@ -131,6 +131,7 @@ import {
   killTmuxPane as killSharedTmuxPane,
   listCurrentWindowHudPaneIds,
   parsePaneIdFromTmuxOutput,
+  registerHudResizeHook,
 } from "../hud/tmux.js";
 
 export { parseTmuxPaneSnapshot, isHudWatchPane, findHudWatchPaneIds } from "../hud/tmux.js";
@@ -3509,6 +3510,9 @@ function runCodex(
     let hudPaneId: string | null = null;
     try {
       hudPaneId = createHudWatchPane(cwd, hudCmd);
+      if (hudPaneId && currentPaneId) {
+        registerHudResizeHook(hudPaneId, currentPaneId, HUD_TMUX_HEIGHT_LINES);
+      }
     } catch (err) {
       logCliOperationFailure(err);
       // HUD split failed, continue without it

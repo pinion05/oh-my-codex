@@ -197,19 +197,23 @@ describe('HUD resize hook command builders', () => {
     assert.equal(buildHudPaneTarget('41'), '%41');
   });
 
-  it('buildRegisterResizeHookArgs uses window target and numeric client-resized hook slot', () => {
+  it('buildRegisterResizeHookArgs uses window target and numeric window-resized hook slot', () => {
     const args = buildRegisterResizeHookArgs('my-session:0', 'omx_resize_team_session_0_1', '%1');
     assert.equal(args[0], 'set-hook');
-    assert.equal(args[1], '-t');
-    assert.equal(args[2], 'my-session:0');
-    assert.match(args[3] ?? '', /^client-resized\[\d+\]$/);
-    assert.equal(args[4], `run-shell -b 'tmux resize-pane -t %1 -y ${HUD_TMUX_TEAM_HEIGHT_LINES} >/dev/null 2>&1 || true'`);
+    assert.equal(args[1], '-w');
+    assert.equal(args[2], '-t');
+    assert.equal(args[3], 'my-session:0');
+    assert.match(args[4] ?? '', /^window-resized\[\d+\]$/);
+    assert.equal(
+      args[5],
+      `run-shell -b 'tmux resize-pane -t %1 -y ${HUD_TMUX_TEAM_HEIGHT_LINES} >/dev/null 2>&1 || true; sleep ${HUD_RESIZE_RECONCILE_DELAY_SECONDS}; tmux resize-pane -t %1 -y ${HUD_TMUX_TEAM_HEIGHT_LINES} >/dev/null 2>&1 || true'`,
+    );
   });
 
   it('buildUnregisterResizeHookArgs removes the exact numeric hook slot', () => {
     const registered = buildRegisterResizeHookArgs('my-session:0', 'omx_resize_team_session_0_1', '%1');
     const unregistered = buildUnregisterResizeHookArgs('my-session:0', 'omx_resize_team_session_0_1');
-    assert.deepEqual(unregistered, ['set-hook', '-u', '-t', 'my-session:0', registered[3] as string]);
+    assert.deepEqual(unregistered, ['set-hook', '-u', '-w', '-t', 'my-session:0', registered[4] as string]);
   });
 
   it('buildClientAttachedReconcileHookName normalizes all segments into collision-safe tokens', () => {
@@ -242,7 +246,7 @@ describe('HUD resize hook command builders', () => {
     const resizeArgs = buildRegisterResizeHookArgs('sess:0', longName, '%1');
     const attachedArgs = buildRegisterClientAttachedReconcileArgs('sess:0', longName, '%1');
 
-    const resizeSlot = resizeArgs[3] ?? '';
+    const resizeSlot = resizeArgs[4] ?? '';
     const attachedSlot = attachedArgs[3] ?? '';
 
     const resizeIndex = Number((resizeSlot.match(/\[(\d+)\]/) ?? [])[1]);
@@ -258,7 +262,7 @@ describe('HUD resize hook command builders', () => {
     const name = 'omx_resize_team_session_0_1';
     const a = buildRegisterResizeHookArgs('s:0', name, '%1');
     const b = buildRegisterResizeHookArgs('s:0', name, '%1');
-    assert.equal(a[3], b[3]);
+    assert.equal(a[4], b[4]);
 
     const c = buildRegisterClientAttachedReconcileArgs('s:0', name, '%1');
     const d = buildRegisterClientAttachedReconcileArgs('s:0', name, '%1');
@@ -297,8 +301,8 @@ describe('HUD resize hook command builders', () => {
       const delayedArgs = buildScheduleDelayedHudResizeArgs('%1');
       const reconcileArgs = buildReconcileHudResizeArgs('%1');
 
-      assert.match(resizeArgs[4] ?? '', new RegExp(escapeRegExp(tmuxPath)));
-      assert.doesNotMatch(resizeArgs[4] ?? '', /^run-shell -b 'tmux resize-pane/);
+      assert.match(resizeArgs[5] ?? '', new RegExp(escapeRegExp(tmuxPath)));
+      assert.doesNotMatch(resizeArgs[5] ?? '', /^run-shell -b 'tmux resize-pane/);
       assert.match(delayedArgs[2] ?? '', new RegExp(escapeRegExp(tmuxPath)));
       assert.doesNotMatch(delayedArgs[2] ?? '', /sleep \d+; tmux resize-pane/);
       assert.match(reconcileArgs[1] ?? '', new RegExp(escapeRegExp(tmuxPath)));
@@ -3374,7 +3378,7 @@ esac
 
           const tmuxLog = await readFile(logPath, 'utf-8');
           assert.match(tmuxLog, new RegExp(`resize-pane -t %3 -y ${HUD_TMUX_TEAM_HEIGHT_LINES}`));
-          assert.doesNotMatch(tmuxLog, /set-hook -t leader:0 client-resized\[\d+\]/);
+          assert.doesNotMatch(tmuxLog, /set-hook -w -t leader:0 window-resized\[\d+\]/);
           assert.doesNotMatch(tmuxLog, /set-hook -t leader:0 client-attached\[\d+\]/);
           assert.doesNotMatch(tmuxLog, /run-shell -b sleep \d+; tmux resize-pane -t %3 -y \d+ >/);
           assert.doesNotMatch(tmuxLog, /run-shell tmux resize-pane -t %3 -y \d+ >/);

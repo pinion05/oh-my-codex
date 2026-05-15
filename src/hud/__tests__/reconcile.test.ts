@@ -162,7 +162,7 @@ describe('reconcileHudForPromptSubmit', () => {
     assert.equal(resized[0]?.heightLines, 3);
   });
 
-  it('registers client-resized hook scoped to the emitting pane after resizing an existing HUD pane', async () => {
+  it('registers window-resized hook scoped to the emitting window after resizing an existing HUD pane', async () => {
     const registered: Array<{ hudPaneId: string; currentPaneId: string | undefined; heightLines: number }> = [];
 
     await reconcileHudForPromptSubmit('/repo', {
@@ -185,7 +185,7 @@ describe('reconcileHudForPromptSubmit', () => {
     assert.equal(registered[0]?.heightLines, 3);
   });
 
-  it('registers client-resized hook scoped to the emitting pane after creating a new HUD pane', async () => {
+  it('registers window-resized hook scoped to the emitting window after creating a new HUD pane', async () => {
     const registered: Array<{ hudPaneId: string; currentPaneId: string | undefined; heightLines: number }> = [];
 
     await reconcileHudForPromptSubmit('/repo', {

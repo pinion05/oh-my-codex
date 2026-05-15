@@ -513,7 +513,7 @@ function buildResizeHookSlot(hookName: string): string {
   for (let i = 0; i < hookName.length; i++) {
     hash = (hash * 31 + hookName.charCodeAt(i)) | 0;
   }
-  return `client-resized[${Math.abs(hash) % TMUX_HOOK_INDEX_MAX}]`;
+  return `window-resized[${Math.abs(hash) % TMUX_HOOK_INDEX_MAX}]`;
 }
 
 function buildClientAttachedHookSlot(hookName: string): string {
@@ -530,14 +530,15 @@ export function buildRegisterResizeHookArgs(
   hudPaneId: string,
   heightLines: number = HUD_TMUX_TEAM_HEIGHT_LINES,
 ): string[] {
-  const resizeCommand = shellQuoteSingle(
-    buildBestEffortShellCommand(buildNestedTmuxShellCommand(buildHudResizeCommand(hudPaneId, heightLines))),
+  const resizeCommand = buildBestEffortShellCommand(buildNestedTmuxShellCommand(buildHudResizeCommand(hudPaneId, heightLines)));
+  const hookCommand = shellQuoteSingle(
+    `${resizeCommand}; sleep ${HUD_RESIZE_RECONCILE_DELAY_SECONDS}; ${resizeCommand}`,
   );
-  return ['set-hook', '-t', hookTarget, buildResizeHookSlot(hookName), `run-shell -b ${resizeCommand}`];
+  return ['set-hook', '-w', '-t', hookTarget, buildResizeHookSlot(hookName), `run-shell -b ${hookCommand}`];
 }
 
 export function buildUnregisterResizeHookArgs(hookTarget: string, hookName: string): string[] {
-  return ['set-hook', '-u', '-t', hookTarget, buildResizeHookSlot(hookName)];
+  return ['set-hook', '-u', '-w', '-t', hookTarget, buildResizeHookSlot(hookName)];
 }
 
 export function buildClientAttachedReconcileHookName(
