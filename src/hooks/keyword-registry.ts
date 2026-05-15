@@ -52,6 +52,11 @@ export const KEYWORD_TRIGGER_DEFINITIONS: readonly KeywordTriggerDefinition[] = 
   { keyword: '$cancel', skill: 'cancel', priority: 5, guidance: 'Cancel active execution modes' },
   { keyword: 'stop', skill: 'cancel', priority: 5, guidance: 'Cancel active execution modes' },
   { keyword: 'abort', skill: 'cancel', priority: 5, guidance: 'Cancel active execution modes' },
+  { keyword: '중단', skill: 'cancel', priority: 5, guidance: 'Cancel active execution modes' },
+  { keyword: '취소', skill: 'cancel', priority: 5, guidance: 'Cancel active execution modes' },
+  { keyword: '멈춰', skill: 'cancel', priority: 5, guidance: 'Cancel active execution modes' },
+  { keyword: '그만', skill: 'cancel', priority: 5, guidance: 'Cancel active execution modes' },
+  { keyword: '종료', skill: 'cancel', priority: 5, guidance: 'Cancel active execution modes' },
 
   { keyword: '$wiki', skill: 'wiki', priority: 5, guidance: 'Activate the project wiki skill' },
   { keyword: 'wiki query', skill: 'wiki', priority: 5, guidance: 'Activate the project wiki skill for search' },

@@ -5,6 +5,7 @@ import { extname, join, relative, resolve } from "path";
 import { pathToFileURL } from "url";
 import { readModeState, readModeStateForActiveDecision, readModeStateForSession, updateModeState } from "../modes/base.js";
 import {
+  canonicalizeSkillActiveState,
   extractSessionIdFromInitializedStatePath,
   getSkillActiveStatePathsForStateDir,
   listActiveSkills,
@@ -1552,7 +1553,7 @@ function buildNativeOutsideTmuxTeamPromptBlockState(
   if (!(environment.launcher === "native" && environment.transport === "outside-tmux")) return null;
 
   const nowIso = new Date().toISOString();
-  return {
+  return canonicalizeSkillActiveState({
     version: 1,
     active: false,
     skill: "team",
@@ -1566,7 +1567,7 @@ function buildNativeOutsideTmuxTeamPromptBlockState(
     turn_id: turnId,
     active_skills: [],
     transition_error: "Codex App/native outside-tmux sessions cannot activate the tmux-only `team` workflow directly. Launch OMX CLI from an attached tmux shell first, then run `omx team ...` there.",
-  };
+  }) as SkillActiveState;
 }
 
 function buildSkillStateCliInstruction(mode: string, statePath: string): string {
@@ -2354,19 +2355,16 @@ async function reconcileStaleRootSkillActiveStateForStop(
   if (!changed) return;
 
   const nowIso = new Date().toISOString();
-  const nextRoot: SkillActiveStateLike = {
+  const nextRoot = canonicalizeSkillActiveState({
     ...rootState,
     active: keptEntries.length > 0,
-    skill: keptEntries[0]?.skill ?? safeString(rootState.skill).trim(),
-    phase: keptEntries[0]?.phase ?? safeString(rootState.phase).trim(),
+    skill: keptEntries[0]?.skill ?? (keptEntries.length > 0 ? safeString(rootState.skill).trim() : ''),
+    phase: keptEntries[0]?.phase ?? (keptEntries.length > 0 ? safeString(rootState.phase).trim() : 'complete'),
     updated_at: nowIso,
     active_skills: keptEntries,
     reconciled_at: nowIso,
     reconciliation_reason: "stop_hook_session_state_terminal",
-  };
-  if (keptEntries.length === 0) {
-    nextRoot.phase = "inactive";
-  }
+  }) as SkillActiveStateLike;
   await writeFile(rootPath, JSON.stringify(nextRoot, null, 2));
 }
 

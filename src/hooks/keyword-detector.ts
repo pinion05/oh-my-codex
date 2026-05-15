@@ -20,6 +20,7 @@ import { KEYWORD_TRIGGER_DEFINITIONS, compareKeywordMatches } from './keyword-re
 import {
   SKILL_ACTIVE_STATE_FILE,
   listActiveSkills,
+  canonicalizeSkillActiveState,
   writeSkillActiveStateCopiesForStateDir,
   type SkillActiveEntry,
 } from '../state/skill-active.js';
@@ -277,8 +278,8 @@ export async function persistDeepInterviewModeState(
   const hadActiveDeepInterview = previousSkill?.skill === 'deep-interview' && previousSkill.active === true;
   if (!previousModeState?.active && !hadActiveDeepInterview) return;
 
-  const releasedInputLock = nextSkill?.skill === 'deep-interview' ? nextSkill.input_lock : previousSkill?.input_lock;
-  const questionExitReason = nextSkill?.skill === 'deep-interview' && nextSkill.active === false ? 'abort' : 'handoff';
+  const releasedInputLock = nextSkill?.input_lock ?? previousSkill?.input_lock;
+  const questionExitReason = previousSkill?.skill === 'deep-interview' && nextSkill?.active === false ? 'abort' : 'handoff';
   const nextState: DeepInterviewModeState = {
     ...(previousModeState?.tmux_pane_id ? { tmux_pane_id: previousModeState.tmux_pane_id } : {}),
     ...(previousModeState?.tmux_pane_set_at ? { tmux_pane_set_at: previousModeState.tmux_pane_set_at } : {}),
@@ -429,8 +430,16 @@ function isWordChar(ch: string | undefined): boolean {
   return Boolean(ch && /[A-Za-z0-9_]/.test(ch));
 }
 
+const KOREAN_CANCEL_KEYWORDS = new Set(['중단', '취소', '멈춰', '그만', '종료']);
+
 function keywordToPattern(keyword: string): RegExp {
   const escaped = escapeRegex(keyword);
+  if (KOREAN_CANCEL_KEYWORDS.has(keyword)) {
+    return new RegExp(
+      `(?<![\\p{L}\\p{N}_])${escaped}(?:(?:\\s*(?:해주세요|해줘|시켜|하자|해))|(?![\\p{L}\\p{N}_]))`,
+      'iu',
+    );
+  }
   const startsWithWord = isWordChar(keyword[0]);
   const endsWithWord = isWordChar(keyword[keyword.length - 1]);
   const prefix = startsWithWord ? '\\b' : '';
@@ -438,15 +447,16 @@ function keywordToPattern(keyword: string): RegExp {
   return new RegExp(`${prefix}${escaped}${suffix}`, 'i');
 }
 
-const KEYWORD_MAP: Array<{ pattern: RegExp; skill: string; priority: number }> = KEYWORD_TRIGGER_DEFINITIONS.map((entry) => ({
+const KEYWORD_MAP: Array<{ keyword: string; pattern: RegExp; skill: string; priority: number }> = KEYWORD_TRIGGER_DEFINITIONS.map((entry) => ({
+  keyword: entry.keyword,
   pattern: keywordToPattern(entry.keyword),
   skill: entry.skill,
   priority: entry.priority,
 }));
 
-const KEYWORDS_REQUIRING_INTENT = new Set(['ralph', 'team', 'stop', 'abort', 'parallel', 'autoresearch', 'ultragoal']);
+const KEYWORDS_REQUIRING_INTENT = new Set(['ralph', 'team', 'stop', 'abort', '중단', '취소', '멈춰', '그만', '종료', 'parallel', 'autoresearch', 'ultragoal']);
 
-type IntentKeyword = 'ralph' | 'team' | 'stop' | 'abort' | 'parallel' | 'autoresearch' | 'ultragoal';
+type IntentKeyword = 'ralph' | 'team' | 'stop' | 'abort' | '중단' | '취소' | '멈춰' | '그만' | '종료' | 'parallel' | 'autoresearch' | 'ultragoal';
 
 const DEEP_INTERVIEW_ACTIVATION_PATTERNS: RegExp[] = [
   /(?:^|[^\w])\$(?:deep-interview)\b/i,
@@ -458,6 +468,11 @@ const DEEP_INTERVIEW_ACTIVATION_PATTERNS: RegExp[] = [
 ];
 
 const DEEP_INTERVIEW_MANAGEMENT_MENTION_PATTERN = /\b(?:clear|cleanup|clean\s+up|remove|reset|delete|fix|debug|report|reported|status|state|lock|unlock|active|inactive|session(?:-scoped)?|scope|scoped|global|legacy|root|mode|workflow)\b/i;
+
+const KOREAN_CANCEL_INTENT_PATTERNS: RegExp[] = [
+  /^\s*(?:중단|취소|멈춰|그만|종료)(?:\s*(?:해|해줘|해주세요|시켜|하자))?\s*[.!。]?\s*$/i,
+  /^\s*(?:현재\s*)?(?:(?:실행\s*중(?:인)?\s*)?(?:모드|작업|워크플로우|흐름|세션)|omx|오엠엑스|workflow|mode|task|run|execution|deep-interview|ralph|team|ultrawork|autopilot)(?:\s*(?:을|를|은|는))?\s*(?:중단|취소|멈춰|그만|종료)(?:\s*(?:해|해줘|해주세요|시켜|하자))?\s*[.!。]?\s*$/i,
+];
 
 /**
  * Per-keyword intent patterns used when a keyword is in KEYWORDS_REQUIRING_INTENT.
@@ -500,6 +515,11 @@ const KEYWORD_INTENT_PATTERNS: Record<IntentKeyword, RegExp[]> = {
     /\/(?:cancel|stop|abort)\b/i,
     /\babort\s+(?:the\s+)?(?:agent|ralph|autopilot|team|ultrawork|execution|current\s+(?:mode|task|run))\b/i,
   ],
+  중단: KOREAN_CANCEL_INTENT_PATTERNS,
+  취소: KOREAN_CANCEL_INTENT_PATTERNS,
+  멈춰: KOREAN_CANCEL_INTENT_PATTERNS,
+  그만: KOREAN_CANCEL_INTENT_PATTERNS,
+  종료: KOREAN_CANCEL_INTENT_PATTERNS,
   parallel: [
     /(?:^|[^\w])\$(?:parallel|ultrawork|ulw)\b/i,
     /\/(?:parallel|ultrawork)\b/i,
@@ -622,10 +642,10 @@ export function detectKeywords(text: string): KeywordMatch[] {
 
   const implicit: KeywordMatch[] = [];
 
-  for (const { pattern, skill, priority } of KEYWORD_MAP) {
+  for (const { keyword, pattern, skill, priority } of KEYWORD_MAP) {
     const match = normalizedText.match(pattern);
     if (match) {
-      if (!hasIntentContextForKeyword(normalizedText, match[0].toLowerCase())) continue;
+      if (!hasIntentContextForKeyword(normalizedText, keyword.toLowerCase())) continue;
       implicit.push({
         keyword: match[0],
         skill,
@@ -763,7 +783,7 @@ export async function recordSkillActivation(input: RecordSkillActivationInput): 
   const hasCancelIntent = matches.some((entry) => entry.skill === 'cancel');
 
   if (hasCancelIntent && hadDeepInterviewLock) {
-    const state: SkillActiveState = {
+    const state = canonicalizeSkillActiveState({
       version: 1,
       active: false,
       skill: 'deep-interview',
@@ -777,7 +797,7 @@ export async function recordSkillActivation(input: RecordSkillActivationInput): 
       turn_id: input.turnId ?? previous?.turn_id,
       active_skills: [],
       ...(previous?.input_lock ? { input_lock: releaseDeepInterviewInputLock(previous.input_lock, nowIso, 'abort') } : {}),
-    };
+    }) as SkillActiveState;
 
     try {
       await writeSkillActiveStateCopiesForStateDir(

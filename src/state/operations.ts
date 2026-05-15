@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { withModeRuntimeContext } from './mode-state-context.js';
 import {
@@ -84,6 +84,23 @@ async function writeAtomicFile(path: string, data: string): Promise<void> {
     await unlink(tmpPath).catch(() => {});
     throw error;
   }
+}
+
+
+function buildNeutralSkillActiveState(nowIso = new Date().toISOString()): Record<string, unknown> {
+  return {
+    version: 1,
+    active: false,
+    skill: '',
+    phase: 'complete',
+    updated_at: nowIso,
+    active_skills: [],
+  };
+}
+
+async function writeNeutralSkillActiveState(path: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  await writeAtomicFile(path, JSON.stringify(buildNeutralSkillActiveState(), null, 2));
 }
 
 async function writeClearedSessionScopedModeState(
@@ -367,9 +384,10 @@ export async function executeStateOperation(
 
         if (!allSessions) {
           const path = getStatePath(mode, cwd, effectiveSessionId);
-          if (
-            mode !== SKILL_ACTIVE_STATE_MODE
-            && effectiveSessionId
+          if (mode === SKILL_ACTIVE_STATE_MODE) {
+            await writeNeutralSkillActiveState(path);
+          } else if (
+            effectiveSessionId
             && existsSync(getStatePath(mode, cwd))
           ) {
             await writeClearedSessionScopedModeState(path, mode, effectiveSessionId);
@@ -393,7 +411,11 @@ export async function executeStateOperation(
         const paths = await getAllScopedStatePaths(mode, cwd);
         for (const path of paths) {
           if (!existsSync(path)) continue;
-          await unlink(path);
+          if (mode === SKILL_ACTIVE_STATE_MODE) {
+            await writeNeutralSkillActiveState(path);
+          } else {
+            await unlink(path);
+          }
           removedPaths.push(path);
         }
         if (mode !== SKILL_ACTIVE_STATE_MODE) {

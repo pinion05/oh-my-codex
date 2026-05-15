@@ -472,7 +472,11 @@ describe('state operations directory initialization', () => {
       assert.equal(cleared.isError, undefined);
 
       assert.equal(existsSync(join(sessionDir, 'ralph-state.json')), false);
-      assert.equal(existsSync(join(sessionDir, 'skill-active-state.json')), false);
+      assert.equal(existsSync(join(sessionDir, 'skill-active-state.json')), true);
+      const canonical = JSON.parse(await readFile(join(sessionDir, 'skill-active-state.json'), 'utf-8')) as { active?: boolean; skill?: string; active_skills?: unknown[] };
+      assert.equal(canonical.active, false);
+      assert.equal(canonical.skill, '');
+      assert.deepEqual(canonical.active_skills, []);
     } finally {
       await rm(wd, { recursive: true, force: true });
     }

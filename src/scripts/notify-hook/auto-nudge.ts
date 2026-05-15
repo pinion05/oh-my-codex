@@ -140,28 +140,102 @@ function releaseDeepInterviewInputLock(skillState, reason, nowIso) {
     released_at: nowIso,
     exit_reason: reason,
   };
-  skillState.phase = 'completing';
+  skillState.phase = 'complete';
   skillState.active = false;
+  skillState.skill = '';
+  skillState.active_skills = [];
   skillState.updated_at = nowIso;
   return skillState;
+}
+
+function skillEntryKey(entry) {
+  return `${safeString(entry?.skill).trim()}::${safeString(entry?.session_id).trim()}`;
+}
+
+function normalizeSkillEntry(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const skill = safeString(raw.skill).trim();
+  if (!skill || raw.active === false) return null;
+  return {
+    ...raw,
+    active: true,
+    skill,
+    phase: safeString(raw.phase).trim() || undefined,
+    activated_at: safeString(raw.activated_at).trim() || undefined,
+    updated_at: safeString(raw.updated_at).trim() || undefined,
+    session_id: safeString(raw.session_id).trim() || undefined,
+    thread_id: safeString(raw.thread_id).trim() || undefined,
+    turn_id: safeString(raw.turn_id).trim() || undefined,
+  };
+}
+
+function listActiveSkillEntries(raw) {
+  if (!raw || typeof raw !== 'object') return [];
+  const deduped = new Map();
+  if (Array.isArray(raw.active_skills)) {
+    for (const candidate of raw.active_skills) {
+      const normalized = normalizeSkillEntry(candidate);
+      if (normalized) deduped.set(skillEntryKey(normalized), normalized);
+    }
+    return [...deduped.values()];
+  }
+  const skill = safeString(raw.skill).trim();
+  if (raw.active === true && skill) {
+    const entry = normalizeSkillEntry({
+      skill,
+      phase: safeString(raw.phase).trim() || undefined,
+      active: true,
+      activated_at: safeString(raw.activated_at).trim() || undefined,
+      updated_at: safeString(raw.updated_at).trim() || undefined,
+      session_id: safeString(raw.session_id).trim() || undefined,
+      thread_id: safeString(raw.thread_id).trim() || undefined,
+      turn_id: safeString(raw.turn_id).trim() || undefined,
+    });
+    if (entry) deduped.set(skillEntryKey(entry), entry);
+  }
+  return [...deduped.values()];
 }
 
 export function normalizeSkillActiveState(raw) {
   if (!raw || typeof raw !== 'object') {
     return null;
   }
-  const skill = safeString(raw.skill);
-  if (!skill) return null;
+  const entries = listActiveSkillEntries(raw);
+  const currentSkill = safeString(raw.skill).trim();
+  const primary = entries.find((entry) => entry.skill === currentSkill) ?? entries[0];
+  if (entries.length === 0) {
+    if (!currentSkill && raw.active !== false && !Array.isArray(raw.active_skills)) return null;
+    return {
+      ...raw,
+      version: asNumber(raw.version) ?? 1,
+      active: false,
+      skill: '',
+      keyword: safeString(raw.keyword),
+      phase: 'complete',
+      updated_at: safeString(raw.updated_at),
+      source: safeString(raw.source),
+      input_lock: normalizeInputLock(raw.input_lock),
+      active_skills: [],
+      session_id: undefined,
+      thread_id: undefined,
+      turn_id: undefined,
+    };
+  }
   return {
+    ...raw,
     version: asNumber(raw.version) ?? 1,
-    active: raw.active !== false,
-    skill,
+    active: true,
+    skill: primary.skill,
     keyword: safeString(raw.keyword),
-    phase: normalizeSkillPhase(raw.phase),
-    activated_at: safeString(raw.activated_at),
-    updated_at: safeString(raw.updated_at),
+    phase: normalizeSkillPhase(primary.phase || raw.phase),
+    activated_at: primary.activated_at || safeString(raw.activated_at),
+    updated_at: primary.updated_at || safeString(raw.updated_at),
     source: safeString(raw.source),
     input_lock: normalizeInputLock(raw.input_lock),
+    session_id: primary.session_id,
+    thread_id: primary.thread_id,
+    turn_id: primary.turn_id,
+    active_skills: entries,
   };
 }
 
@@ -219,6 +293,11 @@ export async function syncSkillStateFromTurn(stateDir, payload) {
 
   if (!skillState) {
     return { invocationSessionId, skillState: null, releaseReason };
+  }
+
+  if (skillState.active !== true && listActiveSkillEntries(skillState).length === 0) {
+    await persistSkillActiveState(stateDir, invocationSessionId, skillState);
+    return { invocationSessionId, skillState, releaseReason };
   }
 
   const previousSkillState = cloneSkillActiveState(skillState);

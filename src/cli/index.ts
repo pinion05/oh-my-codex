@@ -80,6 +80,7 @@ export {
 } from "./codex-home.js";
 import {
   SKILL_ACTIVE_STATE_MODE,
+  canonicalizeSkillActiveState,
   extractSessionIdFromInitializedStatePath,
   getSkillActiveStatePathsForStateDir,
   listActiveSkills,
@@ -3083,7 +3084,7 @@ async function scrubPostLaunchRootSkillActiveForSession(
   if (keptEntries.length === entries.length && rootState.active !== true) return;
   if (keptEntries.length === entries.length && !rootBelongsToSession) return;
 
-  const nextRoot = {
+  const nextRoot = canonicalizeSkillActiveState({
     ...rootState,
     active: keptEntries.length > 0,
     skill: keptEntries[0]?.skill ?? (keptEntries.length > 0 ? cleanPostLaunchString(rootState.skill) : ""),
@@ -3092,7 +3093,7 @@ async function scrubPostLaunchRootSkillActiveForSession(
     active_skills: keptEntries,
     post_launch_reconciled_at: nowIso,
     post_launch_reconciliation_reason: "terminal_session_cleanup",
-  };
+  });
   await writeFileFn(rootPath, JSON.stringify(nextRoot, null, 2));
 }
 
@@ -3232,11 +3233,15 @@ export async function cleanupPostLaunchModeStateFiles(
       try {
         const completedAt = now().toISOString();
         if (mode === SKILL_ACTIVE_STATE_MODE) {
-          result.state.active = false;
-          result.state.phase = "complete";
-          result.state.updated_at = completedAt;
-          result.state.active_skills = [];
-          await writeFile(path, JSON.stringify(result.state, null, 2));
+          const nextSkillState = canonicalizeSkillActiveState({
+            ...result.state,
+            active: false,
+            skill: '',
+            phase: 'complete',
+            updated_at: completedAt,
+            active_skills: [],
+          });
+          await writeFile(path, JSON.stringify(nextSkillState, null, 2));
           continue;
         }
         result.state.active = false;
@@ -4560,6 +4565,7 @@ async function cancelModes(): Promise<void> {
         path: string;
         scope: "root" | "session";
         state: Record<string, unknown>;
+        sessionId?: string;
       }
     >();
 
@@ -4576,6 +4582,7 @@ async function cancelModes(): Promise<void> {
         path: ref.path,
         scope: ref.scope,
         state: parsedState,
+        sessionId: ref.scope === 'session' ? extractSessionIdFromInitializedStatePath(ref.path) : undefined,
       });
     }
 
@@ -4617,13 +4624,38 @@ async function cancelModes(): Promise<void> {
 
     if (!hadActiveRalph) {
       for (const [mode, entry] of states.entries()) {
-        if (entry.state.active === true) cancelMode(mode, "cancelled", true);
+        if (mode !== SKILL_ACTIVE_STATE_MODE && entry.state.active === true) cancelMode(mode, "cancelled", true);
       }
+    }
+
+    const canonicalOnlyCancelled = new Set<string>();
+    const skillActiveEntry = states.get(SKILL_ACTIVE_STATE_MODE);
+    for (const entry of listActiveSkills(skillActiveEntry?.state ?? {})) {
+      if (!isTrackedWorkflowMode(entry.skill)) continue;
+      const modeEntry = states.get(entry.skill);
+      if (modeEntry?.state.active === true || changed.has(entry.skill)) continue;
+      canonicalOnlyCancelled.add(entry.skill);
+      reported.add(entry.skill);
     }
 
     for (const [mode, entry] of states.entries()) {
       if (!changed.has(mode)) continue;
       await writeFile(entry.path, JSON.stringify(entry.state, null, 2));
+    }
+
+    for (const mode of new Set([...changed, ...canonicalOnlyCancelled])) {
+      if (!isTrackedWorkflowMode(mode)) continue;
+      const entry = states.get(mode);
+      await syncCanonicalSkillStateForMode({
+        cwd,
+        baseStateDir: getBaseStateDir(cwd),
+        mode,
+        active: false,
+        currentPhase: 'cancelled',
+        sessionId: entry?.sessionId,
+        nowIso,
+        source: 'cli-cancel',
+      });
     }
 
     for (const mode of reported) {

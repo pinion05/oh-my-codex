@@ -2091,11 +2091,13 @@ exit 0
 
       const skillState = JSON.parse(await readFile(join(sessionStateDir, 'skill-active-state.json'), 'utf-8')) as {
         active: boolean;
+        skill: string;
         phase: string;
         input_lock?: { active: boolean; exit_reason?: string; released_at?: string };
       };
       assert.equal(skillState.active, false);
-      assert.equal(skillState.phase, 'completing');
+      assert.equal(skillState.skill, '');
+      assert.equal(skillState.phase, 'complete');
       assert.equal(skillState.input_lock?.active, false);
       assert.equal(skillState.input_lock?.exit_reason, 'success');
       assert.ok(skillState.input_lock?.released_at);
@@ -2112,6 +2114,63 @@ exit 0
       assert.equal(modeState.input_lock?.active, false);
       assert.equal(modeState.input_lock?.exit_reason, 'success');
       assert.ok(modeState.input_lock?.released_at);
+    });
+  });
+
+
+  it('does not resurrect an inactive deep-interview skill-active tombstone during passive notify sync', async () => {
+    await withTempWorkingDir(async (cwd) => {
+      const omxDir = join(cwd, '.omx');
+      const stateDir = join(omxDir, 'state');
+      const logsDir = join(omxDir, 'logs');
+      const codexHome = join(cwd, 'codex-home');
+      const fakeBinDir = join(cwd, 'fake-bin');
+      const sessionStateDir = join(stateDir, 'sessions', 'sess-managed');
+
+      await mkdir(logsDir, { recursive: true });
+      await mkdir(sessionStateDir, { recursive: true });
+      await mkdir(codexHome, { recursive: true });
+      await mkdir(fakeBinDir, { recursive: true });
+      await writeJson(join(codexHome, '.omx-config.json'), {
+        autoNudge: { enabled: true, delaySec: 0, stallMs: 0 },
+      });
+      await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(join(cwd, 'tmux.log')));
+      await chmod(join(fakeBinDir, 'tmux'), 0o755);
+
+      await writeJson(join(sessionStateDir, 'skill-active-state.json'), {
+        version: 1,
+        active: false,
+        skill: 'deep-interview',
+        phase: 'intent-first',
+        session_id: 'sess-managed',
+        active_skills: [],
+      });
+      await writeJson(join(sessionStateDir, 'deep-interview-state.json'), {
+        active: false,
+        mode: 'deep-interview',
+        current_phase: 'completing',
+        session_id: 'sess-managed',
+      });
+
+      const result = runNotifyHook(cwd, fakeBinDir, codexHome, {
+        session_id: 'sess-managed',
+        'last-assistant-message': 'Plan: continue implementing and run tests.',
+      });
+      assert.equal(result.status, 0, `hook failed: ${result.stderr || result.stdout}`);
+
+      const skillState = JSON.parse(await readFile(join(sessionStateDir, 'skill-active-state.json'), 'utf-8')) as {
+        active: boolean;
+        skill: string;
+        phase: string;
+        active_skills: unknown[];
+      };
+      assert.equal(skillState.active, false);
+      assert.equal(skillState.skill, '');
+      assert.equal(skillState.phase, 'complete');
+      assert.deepEqual(skillState.active_skills, []);
+
+      const modeState = JSON.parse(await readFile(join(sessionStateDir, 'deep-interview-state.json'), 'utf-8')) as { active: boolean };
+      assert.equal(modeState.active, false);
     });
   });
 
@@ -2487,11 +2546,13 @@ exit 0
 
       const skillState = JSON.parse(await readFile(join(sessionStateDir, 'skill-active-state.json'), 'utf-8')) as {
         active: boolean;
+        skill: string;
         phase: string;
         input_lock?: { active: boolean; released_at?: string; exit_reason?: string };
       };
       assert.equal(skillState.active, false);
-      assert.equal(skillState.phase, 'completing');
+      assert.equal(skillState.skill, '');
+      assert.equal(skillState.phase, 'complete');
       assert.equal(skillState.input_lock?.active, false);
       assert.ok(skillState.input_lock?.released_at);
       assert.equal(skillState.input_lock?.exit_reason, 'success');
@@ -2551,6 +2612,7 @@ exit 0
 
       const skillState = JSON.parse(await readFile(join(sessionStateDir, 'skill-active-state.json'), 'utf-8')) as {
         active: boolean;
+        skill: string;
         phase: string;
         input_lock?: { active: boolean; released_at?: string; exit_reason?: string };
       };
@@ -2617,11 +2679,13 @@ exit 0
 
       const skillState = JSON.parse(await readFile(join(sessionStateDir, 'skill-active-state.json'), 'utf-8')) as {
         active: boolean;
+        skill: string;
         phase: string;
         input_lock?: { active: boolean; released_at?: string; exit_reason?: string };
       };
       assert.equal(skillState.active, false);
-      assert.equal(skillState.phase, 'completing');
+      assert.equal(skillState.skill, '');
+      assert.equal(skillState.phase, 'complete');
       assert.equal(skillState.input_lock?.active, false);
       assert.ok(skillState.input_lock?.released_at);
       assert.equal(skillState.input_lock?.exit_reason, 'error');
@@ -2679,9 +2743,9 @@ exit 0
         phase: string;
         input_lock?: { active: boolean; released_at?: string };
       };
-      assert.equal(skillState.skill, 'deep-interview');
+      assert.equal(skillState.skill, '');
       assert.equal(skillState.active, false);
-      assert.equal(skillState.phase, 'completing');
+      assert.equal(skillState.phase, 'complete');
       assert.equal(skillState.input_lock?.active, false);
       assert.ok(skillState.input_lock?.released_at);
     });
