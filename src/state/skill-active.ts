@@ -1,5 +1,5 @@
 import { existsSync } from 'fs';
-import { mkdir, readFile, readdir, unlink, writeFile } from 'fs/promises';
+import { mkdir, readFile, readdir, writeFile } from 'fs/promises';
 import { dirname, join } from 'path';
 import { omxStateDir } from '../utils/paths.js';
 import {
@@ -176,10 +176,11 @@ export function listActiveSkills(raw: unknown): SkillActiveEntry[] {
       if (!normalized || normalized.active === false) continue;
       deduped.set(entryKey(normalized), normalized);
     }
+    return [...deduped.values()];
   }
 
   const topLevelSkill = safeString(state.skill).trim();
-  if (deduped.size === 0 && state.active === true && topLevelSkill) {
+  if (state.active === true && topLevelSkill) {
     const topLevelEntry = {
       skill: topLevelSkill,
       phase: safeString(state.phase).trim() || undefined,
@@ -196,29 +197,54 @@ export function listActiveSkills(raw: unknown): SkillActiveEntry[] {
   return [...deduped.values()];
 }
 
-export function normalizeSkillActiveState(raw: unknown): SkillActiveStateLike | null {
+export function canonicalizeSkillActiveState(raw: unknown): SkillActiveStateLike | null {
   if (!raw || typeof raw !== 'object') return null;
   const state = raw as SkillActiveStateLike;
   const activeSkills = listActiveSkills(state);
-  const primary = activeSkills.find((entry) => entry.skill === safeString(state.skill).trim()) ?? activeSkills[0];
-  const skill = safeString(state.skill).trim() || primary?.skill || '';
-  if (!skill && activeSkills.length === 0) return null;
+  const currentSkill = safeString(state.skill).trim();
+  const primary = activeSkills.find((entry) => (
+    entry.skill === currentSkill
+    && safeString(entry.session_id).trim() === safeString(state.session_id).trim()
+  )) ?? activeSkills.find((entry) => entry.skill === currentSkill) ?? activeSkills[0];
+
+  if (activeSkills.length === 0) {
+    const neutral: SkillActiveStateLike = {
+      ...state,
+      version: typeof state.version === 'number' ? state.version : 1,
+      active: false,
+      skill: '',
+      keyword: safeString(state.keyword).trim(),
+      phase: 'complete',
+      updated_at: safeString(state.updated_at).trim() || undefined,
+      source: safeString(state.source).trim() || undefined,
+      active_skills: [],
+    };
+    delete neutral.activated_at;
+    delete neutral.session_id;
+    delete neutral.thread_id;
+    delete neutral.turn_id;
+    return neutral;
+  }
 
   return {
     ...state,
     version: typeof state.version === 'number' ? state.version : 1,
-    active: typeof state.active === 'boolean' ? state.active : activeSkills.length > 0,
-    skill,
+    active: true,
+    skill: primary.skill,
     keyword: safeString(state.keyword).trim(),
-    phase: safeString(state.phase).trim() || primary?.phase || '',
-    activated_at: safeString(state.activated_at).trim() || primary?.activated_at || '',
-    updated_at: safeString(state.updated_at).trim() || primary?.updated_at || '',
+    phase: primary.phase || safeString(state.phase).trim() || '',
+    activated_at: primary.activated_at || safeString(state.activated_at).trim() || '',
+    updated_at: primary.updated_at || safeString(state.updated_at).trim() || '',
     source: safeString(state.source).trim() || undefined,
-    session_id: safeString(state.session_id).trim() || primary?.session_id || undefined,
-    thread_id: safeString(state.thread_id).trim() || primary?.thread_id || undefined,
-    turn_id: safeString(state.turn_id).trim() || primary?.turn_id || undefined,
-    active_skills: activeSkills.length > 0 ? activeSkills : undefined,
+    session_id: primary.session_id || undefined,
+    thread_id: primary.thread_id || undefined,
+    turn_id: primary.turn_id || undefined,
+    active_skills: activeSkills,
   };
+}
+
+export function normalizeSkillActiveState(raw: unknown): SkillActiveStateLike | null {
+  return canonicalizeSkillActiveState(raw);
 }
 
 export function getSkillActiveStatePaths(cwd: string, sessionId?: string): {
@@ -275,10 +301,10 @@ async function writeSkillActiveStateCopiesToPaths(
   state: SkillActiveStateLike,
   rootState?: SkillActiveStateLike | null,
 ): Promise<void> {
-  const normalized = { version: 1, ...state };
+  const normalized = canonicalizeSkillActiveState({ version: 1, ...state }) ?? { version: 1, active: false, skill: '', phase: 'complete', active_skills: [] };
   const normalizedRoot = rootState === null
     ? null
-    : { version: 1, ...(rootState ?? normalized) };
+    : (canonicalizeSkillActiveState({ version: 1, ...(rootState ?? normalized) }) ?? { version: 1, active: false, skill: '', phase: 'complete', active_skills: [] });
   if (normalizedRoot !== null) {
     const rootPayload = JSON.stringify(normalizedRoot, null, 2);
     await mkdir(dirname(rootPath), { recursive: true });
@@ -480,7 +506,13 @@ export async function syncCanonicalSkillStateForMode(options: SyncCanonicalSkill
     const nextSessionEntries = [...nextVisibleRootEntries, ...sessionOnlyEntries];
 
     if (nextSessionEntries.length === 0) {
-      await unlink(sessionPath).catch(() => {});
+      const neutralSessionState = applyEntriesToState(
+        existingSessionState ?? existingRoot,
+        [],
+        mode,
+        sessionId,
+      );
+      await writeSkillActiveStateCopiesForStateDir(baseStateDir, neutralSessionState, sessionId, nextRootState);
       continue;
     }
 

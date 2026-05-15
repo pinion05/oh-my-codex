@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  canonicalizeSkillActiveState,
   listActiveSkills,
   readVisibleSkillActiveState,
   syncCanonicalSkillStateForMode,
@@ -224,4 +225,70 @@ describe('skill-active state helpers', () => {
       );
     });
   });
+  it('canonicalizes inactive tombstones to neutral state and migrates legacy active top-level state', async () => {
+    const inactive = canonicalizeSkillActiveState({
+      version: 1,
+      active: false,
+      skill: 'deep-interview',
+      phase: 'intent-first',
+      session_id: 'sess-old',
+      active_skills: [],
+    });
+    assert.ok(inactive);
+    assert.equal(inactive.active, false);
+    assert.equal(inactive.skill, '');
+    assert.equal(inactive.phase, 'complete');
+    assert.deepEqual(inactive.active_skills, []);
+    assert.equal(inactive.session_id, undefined);
+
+    const legacy = canonicalizeSkillActiveState({
+      active: true,
+      skill: 'ralph',
+      phase: 'executing',
+      session_id: 'sess-legacy',
+    });
+    assert.ok(legacy);
+    assert.equal(legacy.active, true);
+    assert.equal(legacy.skill, 'ralph');
+    assert.deepEqual(
+      listActiveSkills(legacy).map(({ skill, phase, session_id }) => ({ skill, phase, session_id })),
+      [{ skill: 'ralph', phase: 'executing', session_id: 'sess-legacy' }],
+    );
+  });
+
+  it('preserves same workflow entries in different sessions when clearing one session', async () => {
+    await withTempRepo('omx-skill-active-same-skill-sessions-', async (cwd) => {
+      await mkdir(join(cwd, '.omx', 'state'), { recursive: true });
+      await writeSkillActiveStateCopies(cwd, {
+        active: true,
+        skill: 'deep-interview',
+        phase: 'intent-first',
+        session_id: 'sess-a',
+        active_skills: [
+          { skill: 'deep-interview', phase: 'intent-first', active: true, session_id: 'sess-a' },
+          { skill: 'deep-interview', phase: 'intent-first', active: true, session_id: 'sess-b' },
+        ],
+      });
+
+      await syncCanonicalSkillStateForMode({
+        cwd,
+        mode: 'deep-interview',
+        active: false,
+        sessionId: 'sess-a',
+        nowIso: '2026-05-15T00:00:00.000Z',
+      });
+
+      const rootState = JSON.parse(await readFile(join(cwd, '.omx', 'state', 'skill-active-state.json'), 'utf-8'));
+      assert.deepEqual(
+        listActiveSkills(rootState).map(({ skill, session_id }) => ({ skill, session_id })),
+        [{ skill: 'deep-interview', session_id: 'sess-b' }],
+      );
+      const sessionState = await readVisibleSkillActiveState(cwd, 'sess-a');
+      assert.ok(sessionState);
+      assert.equal(sessionState.active, false);
+      assert.equal(sessionState.skill, '');
+      assert.deepEqual(listActiveSkills(sessionState), []);
+    });
+  });
+
 });

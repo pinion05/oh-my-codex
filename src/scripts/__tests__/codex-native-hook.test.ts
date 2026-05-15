@@ -2458,7 +2458,7 @@ export async function onHookEvent(event) {
       );
 
       assert.equal(result.omxEventName, "keyword-detector");
-      assert.equal(result.skillState?.skill, "team");
+      assert.equal(result.skillState?.skill, "");
       assert.equal(result.skillState?.active, false);
       assert.match(String(result.skillState?.transition_error || ""), /cannot activate the tmux-only `team` workflow directly/);
       const message = String(
@@ -2495,7 +2495,7 @@ export async function onHookEvent(event) {
       );
 
       assert.equal(result.omxEventName, "keyword-detector");
-      assert.equal(result.skillState?.skill, "team");
+      assert.equal(result.skillState?.skill, "");
       assert.equal(result.skillState?.active, false);
       const message = String(
         (result.outputJson as { hookSpecificOutput?: { additionalContext?: string } } | null)?.hookSpecificOutput?.additionalContext ?? "",
@@ -9245,6 +9245,57 @@ exit 0
         systemMessage:
           "OMX native Stop detected a stall/permission-style handoff and continued the turn automatically.",
       });
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("neutralizes stale root deep-interview skill-active state during Stop reconciliation", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-stale-root-di-neutral-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const sessionId = "sess-stop-terminal-di";
+      await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: sessionId });
+      await writeJson(join(stateDir, "sessions", sessionId, "deep-interview-state.json"), {
+        active: false,
+        mode: "deep-interview",
+        current_phase: "completing",
+        completed_at: "2026-05-15T00:00:00.000Z",
+      });
+      await writeJson(join(stateDir, "skill-active-state.json"), {
+        active: true,
+        skill: "deep-interview",
+        phase: "intent-first",
+        source: "keyword-detector",
+        active_skills: [
+          { skill: "deep-interview", phase: "intent-first", active: true, session_id: sessionId },
+        ],
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: sessionId,
+          thread_id: "thread-stop-terminal-di",
+          turn_id: "turn-stop-terminal-di-1",
+          last_assistant_message: "Done.",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.equal(result.outputJson, null);
+
+      const rootSkillState = JSON.parse(
+        await readFile(join(stateDir, "skill-active-state.json"), "utf-8"),
+      ) as { active?: boolean; skill?: string; phase?: string; active_skills?: unknown[]; reconciliation_reason?: string };
+      assert.equal(rootSkillState.active, false);
+      assert.equal(rootSkillState.skill, "");
+      assert.equal(rootSkillState.phase, "complete");
+      assert.deepEqual(rootSkillState.active_skills, []);
+      assert.equal(rootSkillState.reconciliation_reason, "stop_hook_session_state_terminal");
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

@@ -300,6 +300,18 @@ describe('keyword detector team compatibility', () => {
     assert.equal(detectPrimaryKeyword('PASS request aborted when upstream returns 499'), null);
   });
 
+  it('treats exact Korean cancel commands as cancel intent without matching prose', () => {
+    for (const text of ['취소', '중단', '멈춰', '그만', '종료', '현재 모드 취소', '실행 중인 작업 중단']) {
+      const match = detectPrimaryKeyword(text);
+      assert.ok(match, text);
+      assert.equal(match.skill, 'cancel', text);
+    }
+
+    for (const text of ['취소라는 단어를 테스트에 추가해', '중단 상태를 설명해줘', '취소 버튼 문구를 바꿔']) {
+      assert.equal(detectPrimaryKeyword(text), null, text);
+    }
+  });
+
   it('does not trigger ultrawork from incidental parallel test-log prose', () => {
     assert.equal(detectPrimaryKeyword('PASS runs assertions in parallel when sharding is enabled'), null);
     assert.equal(detectPrimaryKeyword('running 8 tests in parallel across 4 workers'), null);
@@ -1362,11 +1374,17 @@ describe('keyword detector skill-active-state lifecycle', () => {
       });
 
       assert.ok(result);
-      assert.equal(result.skill, 'deep-interview');
+      assert.equal(result.skill, '');
       assert.equal(result.active, false);
-      assert.equal(result.phase, 'completing');
+      assert.equal(result.phase, 'complete');
       assert.equal(result.input_lock?.active, false);
       assert.equal(result.input_lock?.released_at, '2026-02-25T00:05:00.000Z');
+      assert.deepEqual(result.active_skills, []);
+
+      const persistedSkill = JSON.parse(await readFile(join(stateDir, SKILL_ACTIVE_STATE_FILE), 'utf-8')) as { skill: string; active: boolean; active_skills: unknown[] };
+      assert.equal(persistedSkill.skill, '');
+      assert.equal(persistedSkill.active, false);
+      assert.deepEqual(persistedSkill.active_skills, []);
 
       const modeState = JSON.parse(await readFile(join(stateDir, DEEP_INTERVIEW_STATE_FILE), 'utf-8')) as {
         active: boolean;
