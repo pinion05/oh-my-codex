@@ -3847,7 +3847,7 @@ exit 0
           const standaloneHudSplitRe = new RegExp(`split-window -v -l ${HUD_TMUX_TEAM_HEIGHT_LINES} -t %1 -d -P -F #\\{pane_id\\}`, 'g');
           assert.equal(tmuxLog.match(teamHudSplitRe)?.length ?? 0, 2);
           assert.equal(tmuxLog.match(standaloneHudSplitRe)?.length ?? 0, 1);
-          assert.equal(tmuxLog.match(/set-hook -t leader:0 client-resized\[\d+\]/g)?.length ?? 0, 2);
+          assert.equal(tmuxLog.match(/set-hook -w -t leader:0 window-resized\[\d+\]/g)?.length ?? 0, 2);
           assert.equal(tmuxLog.match(/set-hook -t leader:0 client-attached\[\d+\]/g)?.length ?? 0, 2);
           assert.equal(tmuxLog.match(/run-shell -b sleep \d+; tmux resize-pane -t %3 -y \d+ >/g)?.length ?? 0, 3);
           assert.equal(tmuxLog.match(/run-shell tmux resize-pane -t %3 -y \d+ >/g)?.length ?? 0, 3);
@@ -5492,7 +5492,7 @@ esac
           assert.equal(existsSync(teamRoot), false);
 
           const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
-          assert.match(tmuxLog, /set-hook -u -t omx-team-team-shutdown-gate-failed:0 client-resized\[\d+\]/);
+          assert.match(tmuxLog, /set-hook -u -w -t omx-team-team-shutdown-gate-failed:0 window-resized\[\d+\]/);
           assert.match(tmuxLog, /kill-session -t omx-team-team-shutdown-gate-failed/);
         },
       );

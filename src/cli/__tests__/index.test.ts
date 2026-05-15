@@ -3668,9 +3668,9 @@ exit 0
       (step) => step.name === "reconcile-hud-resize",
     );
 
-    assert.match(registerHook?.args[4] ?? "", />\/dev\/null 2>&1 \|\| true/);
+    assert.match(registerHook?.args[5] ?? "", />\/dev\/null 2>&1 \|\| true/);
     assert.match(
-      registerHook?.args[4] ?? "",
+      registerHook?.args[5] ?? "",
       new RegExp(`-y ${HUD_TMUX_HEIGHT_LINES}\\b`),
     );
     assert.match(schedule?.args[2] ?? "", />\/dev\/null 2>&1 \|\| true/);
@@ -3758,7 +3758,7 @@ exit 0
     assert.equal(steps[0]?.args[2], "-t");
     assert.equal(steps[0]?.args[3], "omx-demo:0");
     assert.match(steps[0]?.args[4] ?? "", /^client-attached\[\d+\]$/);
-    assert.match(steps[1]?.args[4] ?? "", /^client-resized\[\d+\]$/);
+    assert.match(steps[1]?.args[5] ?? "", /^window-resized\[\d+\]$/);
     assert.deepEqual(steps[2]?.args, ["kill-session", "-t", "omx-demo"]);
   });
 
